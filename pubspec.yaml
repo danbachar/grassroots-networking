@@ -13,9 +13,7 @@ dependencies:
   
   # Unified BLE transport (central + peripheral, bondless)
   grassroots_bluetooth_layer:
-    git:
-      url: git@github.com:danbachar/grassroots-bluetooth-layer.git
-      ref: main
+    path: ../grassroots-bluetooth-layer
 
   
   # Cryptography (Ed25519 signing, SHA-256 hashing)

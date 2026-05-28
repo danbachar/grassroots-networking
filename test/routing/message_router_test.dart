@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:redux/redux.dart';
@@ -608,6 +609,62 @@ void main() {
 
         router.markSeen('seen-id');
         expect(router.isDuplicate('seen-id'), isTrue);
+      });
+
+      test(
+          'duplicate MESSAGE re-ACKs without re-firing onMessageReceived. '
+          'This is what stops the sender\'s watchdog from looping forever '
+          'when its original ACK was lost.', () async {
+        int deliveries = 0;
+        final ackRequests = <String>[];
+        router.onMessageReceived = (_, __, ___) => deliveries++;
+        router.onAckRequested = (_, __, packetId) => ackRequests.add(packetId);
+
+        final p = await signedPacket(
+          type: PacketType.message,
+          packetId: '44444444-4444-4444-4444-444444444444',
+          recipientPubkey: identity.publicKey,
+          payload: Uint8List.fromList([1]),
+        );
+
+        await router.processPacket(p,
+            transport: PeerTransport.bleDirect, rssi: -60);
+        await router.processPacket(p,
+            transport: PeerTransport.bleDirect, rssi: -60);
+        await router.processPacket(p,
+            transport: PeerTransport.bleDirect, rssi: -60);
+
+        expect(deliveries, equals(1),
+            reason: 'Recipient must not double-deliver to the app.');
+        expect(ackRequests, hasLength(3),
+            reason:
+                'Recipient must re-ACK every duplicate so the sender can stop '
+                'retrying.');
+        expect(ackRequests, everyElement(p.packetId));
+      });
+
+      test(
+          'duplicate non-MESSAGE packets (e.g. ACK, signaling) are still '
+          'dropped at the wire level — no re-fire of their callbacks.',
+          () async {
+        int ackReceived = 0;
+        router.onAckReceived = (_) => ackReceived++;
+
+        final ackPayload = utf8.encode('mid-1234');
+        final p = await signedPacket(
+          type: PacketType.ack,
+          packetId: '55555555-5555-5555-5555-555555555555',
+          payload: Uint8List.fromList(ackPayload),
+        );
+
+        await router.processPacket(p,
+            transport: PeerTransport.bleDirect, rssi: -60);
+        await router.processPacket(p,
+            transport: PeerTransport.bleDirect, rssi: -60);
+
+        expect(ackReceived, equals(1),
+            reason: 'ACK packets keep the existing wire-level dedup so a '
+                'spurious double-ACK isn\'t processed twice.');
       });
     });
 

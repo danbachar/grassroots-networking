@@ -7,7 +7,8 @@ import 'package:grassroots_bluetooth_layer/grassroots_bluetooth_layer_testing.da
 import 'package:grassroots_networking/src/models/identity.dart';
 import 'package:grassroots_networking/src/store/app_state.dart';
 import 'package:grassroots_networking/src/store/peers_actions.dart'
-    show FriendEstablishedAction;
+    show FriendEstablishedAction, PeerAnnounceReceivedAction;
+import 'package:grassroots_networking/src/models/peer.dart' show PeerTransport;
 import 'package:grassroots_networking/src/store/reducers.dart';
 import 'package:grassroots_networking/src/store/settings_actions.dart';
 import 'package:grassroots_networking/src/store/settings_state.dart';
@@ -207,7 +208,124 @@ void main() {
       expect(transport.connectedPeerIds, isEmpty);
     });
 
-    test('iOS backs off same central remote after a timeout', () async {
+    test(
+        'connectionStream fires disconnect once per ready→dead transition, '
+        'regardless of failed/disconnected duplicates or scan re-discovery '
+        're-emits',
+        () async {
+      const pathId = 'central:DEADBEEF';
+
+      final disconnectEvents = <String>[];
+      final sub = transport.connectionStream.listen((event) {
+        if (!event.connected) disconnectEvents.add(event.peerId);
+      });
+      addTearDown(sub.cancel);
+
+      // Establish a ready central path.
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: 'DEADBEEF',
+        serviceUuids: ['84c40316-0871-e5ad-3333-000000000000'],
+        rssi: -55,
+        connectable: true,
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: pathId,
+        role: BleRole.central,
+        state: BlePathState.ready,
+        rssi: -55,
+        mtu: 247,
+        canSend: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      // iOS pattern: ready → failed (cancel timer) → disconnected
+      // (didDisconnectPeripheral). Only the first transition out of ready
+      // should surface as a disconnect.
+      callbacks.pushPath(BlePath(
+        pathId: pathId,
+        role: BleRole.central,
+        state: BlePathState.failed,
+        rssi: -55,
+        mtu: 23,
+        canSend: false,
+        error: 'Connection timed out.',
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: pathId,
+        role: BleRole.central,
+        state: BlePathState.disconnected,
+        rssi: -55,
+        mtu: 23,
+        canSend: false,
+        error: 'Connection timed out.',
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      // iOS scan re-discovery with `allowDuplicates: true` re-emits the
+      // cached `.disconnected` path for the next ~2 min while backoff is
+      // active. None of these should add new disconnect events.
+      for (var i = 0; i < 5; i++) {
+        callbacks.pushPath(BlePath(
+          pathId: pathId,
+          role: BleRole.central,
+          state: BlePathState.disconnected,
+          rssi: -50 - i,
+          mtu: 23,
+          canSend: false,
+        ));
+      }
+      await Future<void>.delayed(Duration.zero);
+
+      expect(disconnectEvents, equals([pathId]),
+          reason:
+              'Exactly one disconnect event must fire per ready→dead lifecycle.');
+    });
+
+    test(
+        'failed dial from connecting (never reached ready) does not fire a '
+        'spurious disconnect event', () async {
+      const pathId = 'central:CAFE1234';
+
+      final disconnectEvents = <String>[];
+      final sub = transport.connectionStream.listen((event) {
+        if (!event.connected) disconnectEvents.add(event.peerId);
+      });
+      addTearDown(sub.cancel);
+
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: 'CAFE1234',
+        serviceUuids: ['84c40316-0871-e5ad-3333-000000000000'],
+        rssi: -55,
+        connectable: true,
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: pathId,
+        role: BleRole.central,
+        state: BlePathState.connecting,
+        rssi: -55,
+        mtu: 23,
+        canSend: false,
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: pathId,
+        role: BleRole.central,
+        state: BlePathState.failed,
+        rssi: -55,
+        mtu: 23,
+        canSend: false,
+        error: 'Connection timed out.',
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(disconnectEvents, isEmpty,
+          reason:
+              'A dial that never reached `ready` never produced a connected '
+              'event, so it must not produce a disconnected event either.');
+    });
+
+    test(
+        'a fresh advertisement after a failed dial immediately triggers '
+        'another dial (no backoff)', () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
 
@@ -237,6 +355,9 @@ void main() {
       ));
       await Future<void>.delayed(Duration.zero);
 
+      // The next ad must re-fire the dial — there is no rate-limit window
+      // beyond the in-flight cap and the standard isConnecting / isConnected
+      // gates. The application layer owns retry pacing.
       callbacks.pushAdvertisement(BleAdvertisement(
         remoteId: remoteId,
         serviceUuids: [serviceUuid],
@@ -246,7 +367,205 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(
-          hostApi.calls.where((c) => c == 'connect:$remoteId'), hasLength(1));
+          hostApi.calls.where((c) => c == 'connect:$remoteId'), hasLength(2));
+    });
+
+    test(
+        'MAC rotation while a path is ready: ad from rotated MAC is ignored '
+        '(no parallel dial, no ghost entry)', () async {
+      const oldRemoteId = 'OLDMAC';
+      const newRemoteId = 'NEWMAC';
+      const oldPathId = 'central:$oldRemoteId';
+      const newPathId = 'central:$newRemoteId';
+      // Same derived service UUID = same logical peer (same pubkey).
+      const serviceUuid = '84c40316-0871-e5ad-7777-000000000000';
+
+      // Establish a ready central path on the old MAC.
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: oldRemoteId,
+        serviceUuids: [serviceUuid],
+        rssi: -55,
+        connectable: true,
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: oldPathId,
+        role: BleRole.central,
+        state: BlePathState.ready,
+        rssi: -55,
+        mtu: 247,
+        canSend: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      expect(store.state.peers.discoveredBlePeers[oldPathId]!.isConnected, true);
+
+      hostApi.calls.clear();
+
+      // The same peer rotates its radio MAC — fresh advertisement, different
+      // remoteId, same derived service UUID. Must NOT spawn a second dial.
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: newRemoteId,
+        serviceUuids: [serviceUuid],
+        rssi: -50,
+        connectable: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(hostApi.calls.where((c) => c == 'connect:$newRemoteId'), isEmpty,
+          reason: 'Rotated MAC for a peer we already have ready must not '
+              'trigger a parallel dial.');
+      expect(store.state.peers.discoveredBlePeers.containsKey(newPathId), false,
+          reason:
+              'Rotated MAC must not pile up a ghost DiscoveredPeerState entry '
+              'while the original path is still live.');
+      expect(store.state.peers.discoveredBlePeers[oldPathId]!.isConnected, true,
+          reason: 'Original ready path must be untouched.');
+    });
+
+    test(
+        'MAC rotation while a dial is in-flight: ad from rotated MAC is '
+        'ignored', () async {
+      const oldRemoteId = 'INFLIGHT_OLD';
+      const newRemoteId = 'INFLIGHT_NEW';
+      const oldPathId = 'central:$oldRemoteId';
+      const serviceUuid = '84c40316-0871-e5ad-8888-000000000000';
+
+      // Discovery + plugin acknowledges connecting on the old MAC.
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: oldRemoteId,
+        serviceUuids: [serviceUuid],
+        rssi: -55,
+        connectable: true,
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: oldPathId,
+        role: BleRole.central,
+        state: BlePathState.connecting,
+        rssi: -55,
+        mtu: 23,
+        canSend: false,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      expect(store.state.peers.discoveredBlePeers[oldPathId]!.isConnecting, true);
+
+      hostApi.calls.clear();
+
+      // Fresh advertisement on a rotated MAC for the same logical peer.
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: newRemoteId,
+        serviceUuids: [serviceUuid],
+        rssi: -53,
+        connectable: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(hostApi.calls.where((c) => c == 'connect:$newRemoteId'), isEmpty,
+          reason: 'A dial is already in-flight on the old MAC. Racing a '
+              'second dial on the rotated MAC starves the BLE stack.');
+    });
+
+    test(
+        'MAC rotation after the old path dies: stale ghost is pruned and the '
+        'new MAC is dialed', () async {
+      const oldRemoteId = 'STALE_OLD';
+      const newRemoteId = 'STALE_NEW';
+      const oldPathId = 'central:$oldRemoteId';
+      const newPathId = 'central:$newRemoteId';
+      const serviceUuid = '84c40316-0871-e5ad-9999-000000000000';
+
+      // Old MAC: discover → ready → fail/disconnect.
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: oldRemoteId,
+        serviceUuids: [serviceUuid],
+        rssi: -55,
+        connectable: true,
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: oldPathId,
+        role: BleRole.central,
+        state: BlePathState.ready,
+        rssi: -55,
+        mtu: 247,
+        canSend: true,
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: oldPathId,
+        role: BleRole.central,
+        state: BlePathState.disconnected,
+        rssi: -55,
+        mtu: 23,
+        canSend: false,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      // Old entry is dead (isConnected/isConnecting both false). It still
+      // sits in the Redux map — it gets removed by the next discovery for
+      // the same service UUID.
+      expect(store.state.peers.discoveredBlePeers[oldPathId]!.isConnected, false);
+      expect(store.state.peers.discoveredBlePeers[oldPathId]!.isConnecting, false);
+
+      hostApi.calls.clear();
+
+      // Rotated MAC for the same logical peer arrives.
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: newRemoteId,
+        serviceUuids: [serviceUuid],
+        rssi: -50,
+        connectable: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(store.state.peers.discoveredBlePeers.containsKey(oldPathId), false,
+          reason: 'Dead ghost entry from the old MAC must be pruned when a '
+              'fresh advertisement with the same service UUID arrives.');
+      expect(store.state.peers.discoveredBlePeers.containsKey(newPathId), true,
+          reason: 'New MAC must take over as the live entry.');
+      expect(
+          hostApi.calls.where((c) => c == 'connect:$newRemoteId'), hasLength(1),
+          reason: 'The rotated MAC must be dialed once the old path is dead.');
+    });
+
+    test(
+        'different service UUIDs (genuinely different peers) are tracked '
+        'independently', () async {
+      const remoteA = 'PEER_A';
+      const remoteB = 'PEER_B';
+      const pathA = 'central:$remoteA';
+      const pathB = 'central:$remoteB';
+      const serviceA = '84c40316-0871-e5ad-aaaa-000000000000';
+      const serviceB = '84c40316-0871-e5ad-bbbb-000000000000';
+
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: remoteA,
+        serviceUuids: [serviceA],
+        rssi: -55,
+        connectable: true,
+      ));
+      callbacks.pushPath(BlePath(
+        pathId: pathA,
+        role: BleRole.central,
+        state: BlePathState.ready,
+        rssi: -55,
+        mtu: 247,
+        canSend: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      hostApi.calls.clear();
+
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: remoteB,
+        serviceUuids: [serviceB],
+        rssi: -50,
+        connectable: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(store.state.peers.discoveredBlePeers.containsKey(pathA), true);
+      expect(store.state.peers.discoveredBlePeers.containsKey(pathB), true,
+          reason: 'A different service UUID is a different logical peer and '
+              'must not be deduped against an existing entry.');
+      expect(
+          hostApi.calls.where((c) => c == 'connect:$remoteB'), hasLength(1));
     });
 
     test('Android auto mode yields central role to iOS advertisements',
@@ -292,6 +611,77 @@ void main() {
 
       expect(
           hostApi.calls.where((c) => c == 'connect:$remoteId'), hasLength(1));
+    });
+
+    test(
+        'reverse-leg dial after ANNOUNCE: when the peer\'s advertising MAC '
+        'differs from their connection MAC (modern Android BLE privacy), '
+        'we still dial the advertising MAC once identity is known',
+        () async {
+      // Connection (peripheral) MAC and advertising MAC are different —
+      // this is the real-world Android case where BLE privacy uses
+      // separate addresses for advertising vs initiating connections.
+      const advertisingMac = 'AA:BB:CC:DD:EE:01';
+      const connectionMac = '99:88:77:66:55:02';
+
+      final peerIdentity = await _makeIdentity('Remote');
+      final serviceUuid = peerIdentity.bleServiceUuid;
+
+      // Scanner sees the peer advertising at advertisingMac.
+      callbacks.pushAdvertisement(BleAdvertisement(
+        remoteId: advertisingMac,
+        serviceUuids: [serviceUuid],
+        rssi: -55,
+        connectable: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      // The scanner-driven path may already have dialed advertisingMac
+      // once — that's fine. We're going to clear that history and check
+      // that the reverse-leg fires a fresh dial when ANNOUNCE lands.
+      hostApi.calls.clear();
+
+      // Peripheral path arrives from the (different) connection MAC and
+      // reaches ready before ANNOUNCE — `_maybeDialReverseCentralAfterPeripheralReady`
+      // bails because we don't yet know who's on the other end and the
+      // same-address fallback finds no `central:99:88:...` discovery.
+      callbacks.pushPath(BlePath(
+        pathId: 'peripheral:$connectionMac',
+        role: BleRole.peripheral,
+        state: BlePathState.ready,
+        rssi: null,
+        mtu: 517,
+        canSend: true,
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(hostApi.calls.where((c) => c.startsWith('connect:')), isEmpty,
+          reason:
+              'Pre-ANNOUNCE peripheral-ready must NOT dial the connection MAC '
+              '— that address has no GATT server attached on a BLE-privacy stack.');
+
+      // ANNOUNCE arrives over the peripheral path. GrassrootsNetwork would
+      // dispatch PeerAnnounceReceivedAction (creating the peer entry) and
+      // then call associatePeerWithPubkey to link the peripheral path to
+      // the pubkey. The transport is supposed to then trigger the reverse
+      // leg against an advertising MAC we already know works.
+      store.dispatch(PeerAnnounceReceivedAction(
+        publicKey: peerIdentity.publicKey,
+        nickname: 'Remote',
+        protocolVersion: 1,
+        transport: PeerTransport.bleDirect,
+        blePeripheralDeviceId: 'peripheral:$connectionMac',
+      ));
+      transport.associatePeerWithPubkey(
+        'peripheral:$connectionMac',
+        peerIdentity.publicKey,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(hostApi.calls.where((c) => c == 'connect:$advertisingMac'),
+          hasLength(1),
+          reason: 'Reverse leg must dial the advertising MAC (which has a '
+              'live GATT server), not the connection MAC.');
     });
 
     test(
