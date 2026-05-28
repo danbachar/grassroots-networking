@@ -70,12 +70,6 @@ class BleTransportService extends TransportService {
   /// This is a strict cache of plugin facts, not consumer state.
   final Map<String, ble.BlePath> _paths = {};
 
-  /// iOS can surface an inbound Android GATT-server connection without ever
-  /// completing the matching outbound CoreBluetooth central path. When that
-  /// central dial times out, avoid immediately redialing the same
-  /// CBPeripheral identifier on every duplicate advertisement.
-  final Map<String, DateTime> _iosCentralDialBackoffUntil = {};
-
   /// True while a `start()` call is in flight. Prevents re-entrant `start()`
   /// from `_onAdapterStateChanged` running concurrently with the original.
   bool _starting = false;
@@ -98,8 +92,11 @@ class BleTransportService extends TransportService {
   void Function(GrassrootsPacket packet,
       {String? bleDeviceId, int? rssi, BleRole? bleRole})? onBlePacketReceived;
 
-  /// Called when a peer disconnects at the BLE level.
-  void Function(Peer peer)? onPeerDisconnected;
+  /// Called when a peer disconnects at the BLE level. The argument is the
+  /// peer's current `PeerState` snapshot — this is BLE-transport-level only;
+  /// `GrassrootsNetwork` decides whether overall reachability changed before
+  /// firing its consolidated `onPeerDisconnected`.
+  void Function(PeerState peer)? onPeerDisconnected;
 
   // ===== Convenience getters for Redux state =====
 
@@ -387,6 +384,14 @@ class BleTransportService extends TransportService {
       deviceId: peerId,
       role: role,
     ));
+
+    // Peripheral-side ANNOUNCE just identified the peer. This is the
+    // moment we have enough information to try the reverse-leg dial:
+    // we know the peer's pubkey, so we can derive their service UUID
+    // and search the discovery map for a usable advertising address.
+    if (role == BleRole.peripheral) {
+      _maybeDialReverseCentralForPubkey(pubkey);
+    }
   }
 
   @override
@@ -552,7 +557,7 @@ class BleTransportService extends TransportService {
     final peer = _peersState.getPeerByPubkey(pubkey);
     if (peer == null) return;
     store.dispatch(PeerBleDisconnectedAction(pubkey, role: role));
-    onPeerDisconnected?.call(_peerStateToLegacyPeer(peer));
+    onPeerDisconnected?.call(peer);
   }
 
   // ===== Plugin event handlers =====
@@ -584,6 +589,22 @@ class BleTransportService extends TransportService {
     if (serviceUuid == null) {
       // Plugin already filters by Grassroots prefix, but defensively skip
       // anything that lost its service UUID before reaching us.
+      return;
+    }
+
+    // Drop advertisements from a rotated radio MAC when we already have a
+    // live or in-flight path to the same logical peer on a different MAC.
+    // The service UUID is derived from the peer's pubkey and is stable
+    // across rotations, so a different pathId with the same serviceUuid is
+    // the same peer with a freshly-rotated address. Recording it as a new
+    // DiscoveredPeerState (and dialing it) would create a duplicate central
+    // path racing the existing one — that's exactly the failure mode behind
+    // the GATT-status-133 storm we see when iOS rotates rapidly.
+    final activeOnOtherMac = _peersState
+        .getDiscoveredBlePeersByServiceUuid(serviceUuid)
+        .where((p) => p.transportId != pathId)
+        .any((p) => p.isConnected || p.isConnecting);
+    if (activeOnOtherMac) {
       return;
     }
 
@@ -624,9 +645,6 @@ class BleTransportService extends TransportService {
       // reverse central leg.
       return;
     }
-    if (_centralDialBackoffActive(adv.remoteId)) {
-      return;
-    }
     if (store.state.settings.coldCallTrustLevel == ColdCallTrustLevel.closed &&
         _friendPubkeyForDerivedServiceUuid(serviceUuid) == null) {
       return;
@@ -645,9 +663,6 @@ class BleTransportService extends TransportService {
   /// Each `connectGatt` consumes a controller slot for ~5s on Android; too
   /// many parallel dials starve real connections.
   static const int _maxInFlightCentralDials = 2;
-  static const String _centralPathPrefix = 'central:';
-  static const String _peripheralPathPrefix = 'peripheral:';
-  static const Duration _iosCentralDialFailureBackoff = Duration(minutes: 2);
 
   int _inFlightCentralDials() {
     var count = 0;
@@ -662,9 +677,6 @@ class BleTransportService extends TransportService {
     return count;
   }
 
-  bool get _usesConservativeCentralDialing =>
-      defaultTargetPlatform == TargetPlatform.iOS;
-
   bool _shouldYieldCentralDialToRemote(ble.BleAdvertisement adv) {
     if (store.state.settings.bleRoleMode != BleRoleMode.auto) return false;
     if (defaultTargetPlatform != TargetPlatform.android) return false;
@@ -673,40 +685,137 @@ class BleTransportService extends TransportService {
   }
 
   bool _hasReadyPeripheralPathForRemote(String remoteId) {
-    final path = _paths['$_peripheralPathPrefix$remoteId'];
+    final path = _paths['peripheral:$remoteId'];
     return path != null && _isReady(path);
   }
 
+  /// Bridge for the peripheral-ready event in `_onPathChanged`. Two ways
+  /// to identify the dial target, tried in order:
+  ///
+  /// 1. **Identity-based** (correct for modern Android with BLE privacy):
+  ///    if ANNOUNCE has already landed, look up the peer's pubkey via the
+  ///    peripheral pathId and dial a discovered advertising MAC that
+  ///    matches their derived service UUID.
+  ///
+  /// 2. **Same-address fallback** (older Android stacks, iOS, simulators,
+  ///    and any platform where the advertising MAC equals the connection
+  ///    MAC): dial `central:<peripheral's_remoteId>` if scan already saw
+  ///    that exact remoteId advertising as Grassroots.
+  ///
+  /// Pre-ANNOUNCE-AND-no-same-address-discovery, there's nothing useful
+  /// to do here. The dial is retried from [associatePeerWithPubkey] when
+  /// identity arrives, or from `_onAdvertisement` when a fresh advertising
+  /// MAC for this peer lands.
   void _maybeDialReverseCentralAfterPeripheralReady(ble.BlePath path) {
     if (store.state.settings.bleRoleMode != BleRoleMode.auto) return;
     if (path.role != ble.BleRole.peripheral || !_isReady(path)) return;
 
-    final remoteId = _remoteIdForPeripheralPath(path.pathId);
-    if (remoteId == null) return;
-
-    final centralPathId = '$_centralPathPrefix$remoteId';
-    final knownCentralPath = _paths[centralPathId];
-    if (knownCentralPath != null &&
-        (knownCentralPath.state == ble.BlePathState.connecting ||
-            knownCentralPath.state == ble.BlePathState.connected ||
-            knownCentralPath.state == ble.BlePathState.subscribed ||
-            knownCentralPath.state == ble.BlePathState.ready)) {
+    final pubkey = getPubkeyForPeerId(path.pathId);
+    if (pubkey != null) {
+      _maybeDialReverseCentralForPubkey(pubkey);
       return;
     }
 
-    // Only dial a reverse leg when scan already proved the same remote ID is
-    // advertising our GATT service. This avoids blind dials for centrals that
-    // subscribed to us but are not advertising as Grassroots peripherals.
+    // Same-address fallback. Strip `peripheral:` and look up the matching
+    // `central:` discovery. Only proceed when the scanner actually saw the
+    // remote advertising as a Grassroots peripheral (so the dial has a
+    // known-good target).
+    const peripheralPrefix = 'peripheral:';
+    if (!path.pathId.startsWith(peripheralPrefix)) return;
+    final remoteId = path.pathId.substring(peripheralPrefix.length);
+    final centralPathId = 'central:$remoteId';
+
+    final existingCentral = _paths[centralPathId];
+    if (existingCentral != null &&
+        (existingCentral.state == ble.BlePathState.connecting ||
+            existingCentral.state == ble.BlePathState.connected ||
+            existingCentral.state == ble.BlePathState.subscribed ||
+            existingCentral.state == ble.BlePathState.ready)) {
+      return;
+    }
     if (_peersState.getDiscoveredBlePeer(centralPathId) == null) return;
-    if (_centralDialBackoffActive(remoteId)) return;
     if (_inFlightCentralDials() >= _maxInFlightCentralDials) return;
 
     debugPrint(
-      '[ble] peripheral path ${path.pathId} is ready; dialing reverse '
-      'central path $centralPathId.',
+      '[ble] reverse leg (same-address fallback): peripheral path '
+      '${path.pathId} is ready; dialing $centralPathId.',
     );
     unawaited(connectToDevice(centralPathId));
   }
+
+  /// Try to open the central direction for a peer we already hold a
+  /// peripheral path to. Keyed by the peer's **identity** (derived service
+  /// UUID), NOT by the radio MAC they connected to us from: modern Android
+  /// stacks use BLE-privacy with distinct advertising and initiator
+  /// addresses, so a peer's connection MAC almost never appears in scan
+  /// results. Looking up the dial target by service UUID lets us pick an
+  /// advertising MAC the scanner has actually seen (and therefore one with
+  /// a live Grassroots GATT server) rather than blindly dialing the
+  /// connection MAC, which would always fail.
+  ///
+  /// Idempotent and safe to call repeatedly. Triggered from:
+  ///   - peripheral-path-ready (when ANNOUNCE has already landed),
+  ///   - `associatePeerWithPubkey` (when ANNOUNCE just identified the peer),
+  ///   - `_onAdvertisement` (when a fresh advertising MAC appears for a
+  ///     peer we have peripheral-only).
+  void _maybeDialReverseCentralForPubkey(Uint8List pubkey) {
+    if (store.state.settings.bleRoleMode != BleRoleMode.auto) return;
+
+    final peer = _peersState.getPeerByPubkey(pubkey);
+    if (peer == null) return;
+    // Already have central? Nothing to do. Already have an in-flight dial
+    // for the central side? Likewise — `_paths` tracks every state the
+    // plugin has surfaced for the central pathIds we've requested.
+    if (peer.bleCentralDeviceId != null) return;
+    if (peer.blePeripheralDeviceId == null) return; // not actually peripheral-attached
+
+    final serviceUuid =
+        GrassrootsIdentity.deriveServiceUuid(pubkey).toLowerCase();
+
+    // Skip if any central pathId for this service UUID is mid-handshake.
+    // (Across-MAC, since the discovery map can hold multiple rotated MACs.)
+    final alreadyDialing = _paths.values.any((p) {
+      if (p.role != ble.BleRole.central) return false;
+      if (p.state != ble.BlePathState.connecting &&
+          p.state != ble.BlePathState.connected &&
+          p.state != ble.BlePathState.subscribed &&
+          p.state != ble.BlePathState.ready) {
+        return false;
+      }
+      final discovered = _peersState.getDiscoveredBlePeer(p.pathId);
+      return discovered?.serviceUuid?.toLowerCase() == serviceUuid;
+    });
+    if (alreadyDialing) return;
+
+    if (_inFlightCentralDials() >= _maxInFlightCentralDials) return;
+
+    // Pick any discovered advertising MAC that hashes to this peer's
+    // identity and isn't itself in a connecting/connected state. If none
+    // exist yet we bail — the next advertisement that lands for this peer
+    // will re-trigger us (`_onAdvertisement` calls back into here).
+    final candidate = _peersState
+        .getDiscoveredBlePeersByServiceUuid(serviceUuid)
+        .firstWhere(
+          (dp) => !dp.isConnected && !dp.isConnecting,
+          orElse: () => _noCandidate,
+        );
+    if (identical(candidate, _noCandidate)) return;
+
+    debugPrint(
+      '[ble] reverse leg: dialing ${candidate.transportId} for peer '
+      '${peer.displayName} (peripheral up, opening central direction).',
+    );
+    unawaited(connectToDevice(candidate.transportId));
+  }
+
+  /// Sentinel returned by `firstWhere` when no candidate matches.
+  /// Constructed once because `DiscoveredPeerState` requires positional args.
+  static final DiscoveredPeerState _noCandidate = DiscoveredPeerState(
+    transportId: '',
+    rssi: 0,
+    discoveredAt: DateTime.fromMillisecondsSinceEpoch(0),
+    lastSeen: DateTime.fromMillisecondsSinceEpoch(0),
+  );
 
   bool _advertisementLooksLikeAppleDevice(ble.BleAdvertisement adv) {
     final manufacturerData = adv.manufacturerData;
@@ -724,55 +833,6 @@ class BleTransportService extends TransportService {
     return name.contains('iphone') ||
         name.contains('ipad') ||
         name.contains('ipod');
-  }
-
-  bool _centralDialBackoffActive(String remoteId) {
-    if (!_usesConservativeCentralDialing) return false;
-
-    final until = _iosCentralDialBackoffUntil[remoteId];
-    if (until == null) return false;
-
-    final now = DateTime.now();
-    if (!now.isBefore(until)) {
-      _iosCentralDialBackoffUntil.remove(remoteId);
-      return false;
-    }
-    return true;
-  }
-
-  void _markCentralDialBackoff(ble.BlePath path) {
-    if (!_usesConservativeCentralDialing) return;
-    if (path.role != ble.BleRole.central) return;
-
-    final remoteId = _remoteIdForCentralPath(path.pathId);
-    if (remoteId == null) return;
-
-    final until = DateTime.now().add(_iosCentralDialFailureBackoff);
-    _iosCentralDialBackoffUntil[remoteId] = until;
-    debugPrint(
-      '[ble] iOS central dial backoff: remoteId=$remoteId '
-      'until=${until.toIso8601String()} '
-      'after state=${path.state} error=${path.error ?? "none"}',
-    );
-  }
-
-  void _clearCentralDialBackoff(ble.BlePath path) {
-    if (path.role != ble.BleRole.central) return;
-
-    final remoteId = _remoteIdForCentralPath(path.pathId);
-    if (remoteId == null) return;
-
-    _iosCentralDialBackoffUntil.remove(remoteId);
-  }
-
-  String? _remoteIdForCentralPath(String pathId) {
-    if (!pathId.startsWith(_centralPathPrefix)) return null;
-    return pathId.substring(_centralPathPrefix.length);
-  }
-
-  String? _remoteIdForPeripheralPath(String pathId) {
-    if (!pathId.startsWith(_peripheralPathPrefix)) return null;
-    return pathId.substring(_peripheralPathPrefix.length);
   }
 
   void _onPathChanged(ble.BlePath path) {
@@ -798,7 +858,6 @@ class BleTransportService extends TransportService {
         break;
       case ble.BlePathState.ready:
         if (previous?.state != ble.BlePathState.ready) {
-          _clearCentralDialBackoff(path);
           store.dispatch(BleDeviceConnectedAction(path.pathId));
           _addConnectionEvent(TransportConnectionEvent(
             peerId: path.pathId,
@@ -811,23 +870,21 @@ class BleTransportService extends TransportService {
         }
         break;
       case ble.BlePathState.failed:
-        if (path.role == ble.BleRole.central) {
-          store.dispatch(BleDeviceConnectionFailedAction(path.pathId));
-        }
-        _markCentralDialBackoff(path);
-        _emitDisconnect(path, role);
-        _paths.remove(path.pathId);
-        break;
       case ble.BlePathState.disconnected:
       case ble.BlePathState.stale:
-        if (path.role == ble.BleRole.central &&
-            previous != null &&
-            previous.state != ble.BlePathState.ready &&
-            previous.state != ble.BlePathState.disconnected &&
-            previous.state != ble.BlePathState.stale) {
-          _markCentralDialBackoff(path);
+        if (path.state == ble.BlePathState.failed &&
+            path.role == ble.BleRole.central) {
+          store.dispatch(BleDeviceConnectionFailedAction(path.pathId));
         }
-        _emitDisconnect(path, role);
+        // Mirror the connect emit at the `ready` case: surface a disconnect
+        // to the upper layer only on a true transition out of `ready`.
+        // Failed dials from `connecting` never produced a "connected" event,
+        // and re-emits of an already-dead path (the iOS `.failed → .disconnected`
+        // pair, and scan re-discoveries that keep firing path-changed with
+        // the cached state) would otherwise spam disconnect logs.
+        if (previous?.state == ble.BlePathState.ready) {
+          _emitDisconnect(path, role);
+        }
         _paths.remove(path.pathId);
         break;
     }
@@ -921,14 +978,4 @@ class BleTransportService extends TransportService {
     return null;
   }
 
-  Peer _peerStateToLegacyPeer(PeerState s) => Peer(
-        publicKey: s.publicKey,
-        nickname: s.nickname,
-        connectionState: s.connectionState,
-        transport: s.transport,
-        bleDeviceId: s.bleDeviceId,
-        udpAddress: s.udpAddress,
-        rssi: s.rssi,
-        protocolVersion: s.protocolVersion,
-      );
 }

@@ -9,7 +9,7 @@ Grassroots Networking is a **peer-to-peer messaging transport** — a thin layer
 
 **Core principles:**
 
-- **Direct delivery only.** Messages go straight from sender to recipient. If the recipient is unreachable, the send fails and the caller decides what to do. There is no caching, no store-and-forward queue, no relaying of message content through intermediaries. The application layer owns persistence and retry logic.
+- **Direct delivery only.** Messages go straight from sender to recipient — never through an intermediary. The sender's transport MAY queue its own outbound messages locally when the recipient is temporarily unreachable and replay them once a path opens (madGLP "fair message delivery"), but no intermediary ever holds, caches, or relays another peer's traffic.
 - **Identity is a key pair.** Every device holds an Ed25519 key pair. The public key *is* the peer's identity — nicknames are cosmetic. All trust decisions flow from cryptographic verification.
 - **Two transports, one interface.** BLE covers nearby peers without Internet; UDP covers the globe. Both transports surface the same abstraction to the coordinator: connect, send, receive, disconnect. BLE is preferred when both are available.
 - **Clean breaks, not compatibility shims.** When refactoring, fully replace old code. No legacy wrappers, no "kept for compatibility" comments, no dead code. Update every call site. There are no installed apps in the wild — you are free to rename, restructure, and break wire formats whenever it improves the design.
@@ -20,9 +20,11 @@ When refactoring, DO NOT keep old code "for legacy" or "for compatibility". Full
 
 This applies to **wire-format decoders too**: when you add a field to a packet, do not write the decoder to "gracefully handle truncated/old payloads where the field is missing." There is no old version in the wild — the new field is required, and a payload that lacks it is malformed and must throw. Tolerance for a hypothetical previous version is a compatibility shim by another name.
 
-## No Store-and-Forward / No Relaying
+## Local Queueing, No Relaying
 
-Grassroots does NOT cache, relay, or forward messages on behalf of other peers. A send either succeeds (recipient is online and reachable) or fails immediately. The application layer handles retry. This is a deliberate design choice — keeping the transport layer stateless and simple.
+Grassroots does NOT relay or forward messages on behalf of other peers — the transport never carries another peer's message through an intermediary. But the sender's own outbound messages MAY be queued locally when the recipient is temporarily unreachable, and re-sent automatically once a transport path opens. This satisfies the madGLP "fair message delivery" assumption (`docs/GLP_Networking_API/sections/api.tex`, §Networking Assumptions).
+
+The boundary: the queue lives on the sender, holds only the sender's own messages, and replays them directly to the recipient when the recipient becomes reachable. No intermediary ever holds, caches, or rebroadcasts another peer's traffic.
 
 ## BLE Discovery & Identity
 
@@ -60,9 +62,11 @@ The `TransportState` lifecycle for each transport is: `uninitialized → initial
 
 User-facing UI strings should say "Internet", not "UDP" or internal protocol names.
 
-## Single Public Address
+## One Address Per Connection, Multiple Candidates Per Peer
 
-Each device advertises exactly **one UDP address** — the public address discovered via an external service (seeip.org). Never advertise LAN/private addresses. Never add a second address field to the ANNOUNCE. If the public address doesn't work on the local network (hairpin routing failure), the solution is to fix the transport layer (e.g. fall back to raw UDP), not to add LAN addresses.
+Per **connection**, exactly one address pair is in use — there is no per-message address selection or mid-stream address switching. But a device MAY advertise multiple address **candidates** in ANNOUNCE (e.g. public IPv4, public IPv6, link-local IPv6 for the same LAN), and each peer pair selects the candidate that actually works between them: link-local on the same LAN, public IPv6 across the Internet, IPv4 as a fallback. Once a connection is established on a candidate, the pair sticks to that candidate until the path breaks.
+
+The primary public address is discovered via an external service (e.g. seeip.org). Link-local candidates are scoped to the local network and never reach the public Internet; they exist so two devices on the same LAN can connect directly without traversing NAT.
 
 ## Peer Address Persistence
 
@@ -71,3 +75,5 @@ Never unilaterally clear a peer's stored UDP address. Update it when a new valid
 ## Transport Independence
 
 BLE and UDP are independent transports. Disabling or losing one must have **zero effect** on the other's connection state, peer reachability, or online status. A peer connected via UDP remains online regardless of BLE state. The stale peer logic, the UI, and the reducer must all respect this: never let a BLE disconnection degrade UDP-derived state.
+
+Application-level callbacks (`onPeerConnected`, `onPeerDisconnected`) report consolidated end-to-end reachability, not per-transport events: they fire only when the overall reachable/unreachable state changes (transitions to/from zero live transports). Losing one of two live transports does not fire a disconnect — it only fires when the *last* transport drops.

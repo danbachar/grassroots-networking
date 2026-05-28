@@ -420,7 +420,9 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
   }
 
   void _checkPendingChat() {
-    if (_pendingChatPeerHex != null && _grassroots != null && _identity != null) {
+    if (_pendingChatPeerHex != null &&
+        _grassroots != null &&
+        _identity != null) {
       final peerHex = _pendingChatPeerHex!;
       _pendingChatPeerHex = null;
 
@@ -621,12 +623,8 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
     await _showMessageNotification(senderHex, senderName, content);
   }
 
-  Future<void> _handlePictureMessage(
-      String senderHex,
-      String myHex,
-      PictureSayBlock block,
-      String messageId,
-      Uint8List senderPubkey) async {
+  Future<void> _handlePictureMessage(String senderHex, String myHex,
+      PictureSayBlock block, String messageId, Uint8List senderPubkey) async {
     // Persist the image bytes to disk under a SHA-256-named file. dedupes
     // identical images naturally.
     final file = await writeMediaFile(block.imageBytes, block.mime);
@@ -866,7 +864,8 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
     );
 
     // Send via Grassroots
-    final messageId = await _grassroots!.send(peer.publicKey, block.serialize());
+    final messageId =
+        await _grassroots!.send(peer.publicKey, block.serialize());
     if (messageId == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -935,7 +934,8 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
     final block = FriendshipAcceptBlock();
 
     // Send via Grassroots (works over BLE)
-    final messageId = await _grassroots!.send(peer.publicKey, block.serialize());
+    final messageId =
+        await _grassroots!.send(peer.publicKey, block.serialize());
     if (messageId == null) {
       debugPrint('⚠️ Failed to send friendship accept to ${peer.displayName}');
     }
@@ -1326,7 +1326,7 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
   Widget _buildChatListItem(_ChatPreview chat) {
     final displayName = chat.displayName;
     final isFriend = chat.isFriend;
-    final isOnline = chat.peer?.isLiveReachable ?? false;
+    final isOnline = chat.peer?.isReachable ?? false;
 
     return Dismissible(
       key: ValueKey('chat-${chat.peerHex}'),
@@ -1343,7 +1343,8 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
             SizedBox(width: 8),
             Text(
               'Delete',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              style:
+                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
           ],
         ),
@@ -1361,84 +1362,84 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
         }
       },
       child: ListTile(
-      leading: Stack(
-        children: [
-          CircleAvatar(
-            backgroundColor: isFriend ? Colors.blue : Colors.blueGrey,
-            child: Text(
-              displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-          if (isOnline)
-            Positioned(
-              right: 0,
-              bottom: 0,
-              child: Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: Colors.green,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.black, width: 2),
-                ),
-              ),
-            ),
-        ],
-      ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                Flexible(
-                  child: Text(displayName, overflow: TextOverflow.ellipsis),
-                ),
-                if (isFriend) ...[
-                  const SizedBox(width: 4),
-                  const Icon(Icons.people, size: 14, color: Colors.blue),
-                ],
-              ],
-            ),
-          ),
-          if (chat.unreadCount > 0)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.red,
-                borderRadius: BorderRadius.circular(10),
-              ),
+        leading: Stack(
+          children: [
+            CircleAvatar(
+              backgroundColor: isFriend ? Colors.blue : Colors.blueGrey,
               child: Text(
-                chat.unreadCount.toString(),
-                style: const TextStyle(color: Colors.white, fontSize: 12),
+                displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                style: const TextStyle(color: Colors.white),
               ),
             ),
-        ],
-      ),
-      subtitle: Text(
-        _chatPreviewText(chat.lastMessage),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: chat.unreadCount > 0 ? Colors.white : Colors.grey,
-          fontWeight:
-              chat.unreadCount > 0 ? FontWeight.w500 : FontWeight.normal,
+            if (isOnline)
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: Colors.green,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.black, width: 2),
+                  ),
+                ),
+              ),
+          ],
         ),
-      ),
-      trailing: Text(
-        _formatMessageTime(chat.lastMessage.timestamp),
-        style: const TextStyle(color: Colors.grey, fontSize: 12),
-      ),
-      onTap: () {
-        // Live peer wins; otherwise synthesize a stub from the friendship so
-        // the chat opens for offline friends. ChatScreen + grassroots.send
-        // only need the pubkey + nickname; if no transport is live, the send
-        // path emits MessageFailedAction as usual.
-        final peer = chat.peer ?? _stubPeerFromChatPreview(chat);
-        if (peer != null) {
-          _openChat(peer);
-        }
-      },
+        title: Row(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(displayName, overflow: TextOverflow.ellipsis),
+                  ),
+                  if (isFriend) ...[
+                    const SizedBox(width: 4),
+                    const Icon(Icons.people, size: 14, color: Colors.blue),
+                  ],
+                ],
+              ),
+            ),
+            if (chat.unreadCount > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  chat.unreadCount.toString(),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+          ],
+        ),
+        subtitle: Text(
+          _chatPreviewText(chat.lastMessage),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: chat.unreadCount > 0 ? Colors.white : Colors.grey,
+            fontWeight:
+                chat.unreadCount > 0 ? FontWeight.w500 : FontWeight.normal,
+          ),
+        ),
+        trailing: Text(
+          _formatMessageTime(chat.lastMessage.timestamp),
+          style: const TextStyle(color: Colors.grey, fontSize: 12),
+        ),
+        onTap: () {
+          // Live peer wins; otherwise synthesize a stub from the friendship so
+          // the chat opens for offline friends. ChatScreen + grassroots.send
+          // only need the pubkey + nickname; if no transport is live, the send
+          // path queues messages until a connection resumes.
+          final peer = chat.peer ?? _stubPeerFromChatPreview(chat);
+          if (peer != null) {
+            _openChat(peer);
+          }
+        },
       ),
     );
   }
@@ -1669,8 +1670,8 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
                                 fontSize: 12)),
                       ),
                       ...(_peers.values.toList()
-                            ..sort((a, b) => (b.rssi ?? -100)
-                                .compareTo(a.rssi ?? -100)))
+                            ..sort((a, b) =>
+                                (b.rssi ?? -100).compareTo(a.rssi ?? -100)))
                           .map((peer) => _buildPeerListItem(peer)),
                     ],
                   ],
@@ -2391,7 +2392,6 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
     );
   }
 
-
   /// Generate a brand-new Ed25519 keypair and restart Grassroots under the new
   /// identity. Useful for testing discovery and identity reset behavior
   /// without an uninstall+reinstall cycle.
@@ -2498,7 +2498,6 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
       ),
     );
   }
-
 
   void _showNicknameChangeAnimation(
       String oldName, String newName, String peerId) {

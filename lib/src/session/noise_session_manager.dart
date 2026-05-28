@@ -181,11 +181,6 @@ class NoiseSessionManager {
     removed?.complete(false);
   }
 
-  void resetByPubkeyHex(PeerTransport transport, String pubkeyHex) {
-    final removed = _entries.remove(_SessionKey(transport, pubkeyHex));
-    removed?.complete(false);
-  }
-
   void resetTransport(PeerTransport transport) {
     final keys = _entries.keys
         .where((key) => key.transport == transport)
