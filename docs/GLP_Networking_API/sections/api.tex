@@ -38,7 +38,7 @@ When two agents cannot discover each other via BLE proximity, they may exchange 
 \endhead
 Scan for peers & \func{getPeers()} $\to$ \code{List<Peer>} & Discover currently reachable peers. \\
 \rowcolor{rowgray}
-Peer discovered & \func{onPeerDiscovered(cb)} & Callback when a new peer is detected. The callback receives the peer's public key and nickname. \\
+Peer discovered & \func{onPeerDiscovered(cb)} & Callback when a new peer is detected. The callback receives the peer's public key and nickname. \dan{Discovery precedes connection. A peer's public key and nickname are learned from the signed ANNOUNCE, which is sent in the clear (authenticated by an Ed25519 signature, not encrypted) and bootstraps the identity that the encrypted session is keyed on --- so it necessarily arrives \emph{before} the Noise handshake completes. Since \func{onPeerConnected} is gated on an authenticated Noise session (Section~\ref{sec:ip-connection}), there is a real ``discovered but not yet connected'' window spanning the handshake. The Dart implementation therefore fires \func{onPeerDiscovered} on first ANNOUNCE receipt (once per identity, registering the agent$\leftrightarrow$pubkey mapping) and \func{onPeerConnected} only once the session authenticates. A peer that leaves and re-enters range re-fires \func{onPeerConnected}, not \func{onPeerDiscovered}: its identity is already known. (BLE scanning surfaces a device by its derived service UUID even earlier, but that carries neither public key nor nickname, so it cannot drive this callback.)} \\
 Peer connected & \func{onPeerConnected(cb)} & Callback when a peer becomes reachable for communication. \\
 \rowcolor{rowgray}
 Peer disconnected & \func{onPeerDisconnected(cb)} & Callback when a peer is no longer reachable. \\
