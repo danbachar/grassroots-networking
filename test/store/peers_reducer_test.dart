@@ -1356,13 +1356,19 @@ void main() {
       expect(peer.bleDeviceId, 'central-1');
     });
 
-    test('isReachable with BLE', () {
-      final peer = PeerState(
+    test('isReachable requires an authenticated BLE session, not just a link',
+        () {
+      final linkOnly = PeerState(
         publicKey: _testPubkey(1),
         nickname: 'Alice',
         blePeripheralDeviceId: 'peripheral-1',
       );
-      expect(peer.isReachable, true);
+      // A raw BLE link without a completed Noise session is not reachable —
+      // onPeerConnected fires only after authentication (#2b).
+      expect(linkOnly.isReachable, false);
+
+      final authenticated = linkOnly.copyWith(bleAuthenticated: true);
+      expect(authenticated.isReachable, true);
     });
 
     test('activeTransport prefers BLE', () {

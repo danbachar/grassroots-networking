@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:redux/redux.dart';
-import 'package:sodium_libs/sodium_libs.dart';
+import 'package:sodium_libs/sodium_libs_sumo.dart';
 import 'package:uuid/uuid.dart';
 import 'ble/permission_handler.dart';
 import 'signaling/signaling_codec.dart';
@@ -274,10 +274,12 @@ class GrassrootsNetwork {
   /// Redux store for app state
   final Store<AppState> store;
 
-  /// Initialized libsodium instance for native Ed25519 sign/verify.
-  /// The caller (typically `main()`) is responsible for `await SodiumInit.init()`
-  /// once at app startup and passing the result here.
-  final Sodium sodium;
+  /// Initialized libsodium (SUMO) instance for native Ed25519 sign/verify and
+  /// the Ed25519↔X25519 conversion used to derive/verify Noise static keys.
+  /// The caller (typically `main()`) is responsible for
+  /// `await SodiumSumoInit.init()` once at app startup and passing the result
+  /// here. SUMO is required for `crypto_sign_ed25519_*_to_curve25519`.
+  final SodiumSumo sodium;
 
   /// Subscription for listening to store changes
   StreamSubscription<AppState>? _storeSubscription;
@@ -294,6 +296,13 @@ class GrassrootsNetwork {
   /// consolidated view of all transports. A missing entry is treated as
   /// `false` so a peer that materializes already-reachable fires connect.
   final Map<String, bool> _lastKnownReachability = {};
+
+  /// Pubkeys (hex) already surfaced via [onPeerDiscovered] this session.
+  /// Discovery is the identity-learned event — the first accepted ANNOUNCE
+  /// carrying a peer's public key + nickname — which precedes the Noise session
+  /// and therefore [onPeerConnected]. Fired once per identity; a peer going out
+  /// of range and returning is a re-*connect*, not a re-discover.
+  final Set<String> _discoveredPubkeyHexes = {};
 
   /// Permission handler
   final PermissionHandler _permissions = PermissionHandler();
@@ -512,7 +521,7 @@ class GrassrootsNetwork {
   }) {
     _protocolHandler = ProtocolHandler(identity: identity, sodium: sodium);
     _fragmentHandler = FragmentHandler();
-    _noiseSessions = NoiseSessionManager(identity: identity);
+    _noiseSessions = NoiseSessionManager(identity: identity, sodium: sodium);
     _messageRouter = MessageRouter(
       identity: identity,
       store: store,
@@ -2548,6 +2557,32 @@ class GrassrootsNetwork {
     return store.state.friendships.isFriend(hex);
   }
 
+  /// Fired when a Noise XX session for [transport] with [pubkey] completes
+  /// authentication. Consolidated reachability — and therefore
+  /// [onPeerConnected] — is gated on this: a transport counts toward
+  /// `isReachable` only once its session is authenticated (spec
+  /// `docs/GLP_Networking_API/sections/ip.tex` §IP Connection, "established and
+  /// authenticated"). Also drains any queued messages now that an encrypted
+  /// channel exists.
+  void _onNoiseSessionEstablished(PeerTransport transport, Uint8List pubkey) {
+    switch (transport) {
+      case PeerTransport.udp:
+        store.dispatch(
+          PeerUdpConnectionChangedAction(
+            pubkeyHex: _pubkeyToHex(pubkey),
+            connected: true,
+          ),
+        );
+        break;
+      case PeerTransport.bleDirect:
+        store.dispatch(PeerBleAuthenticatedAction(pubkey));
+        break;
+      case PeerTransport.webrtc:
+        break;
+    }
+    _drainQueuedMessagesForPeer(pubkey);
+  }
+
   Future<void> _startNoiseHandshakeForPeer({
     required PeerTransport transport,
     required PeerState peer,
@@ -3657,6 +3692,9 @@ class GrassrootsNetwork {
             payload: response,
           );
         }
+        if (result.sessionEstablished) {
+          _onNoiseSessionEstablished(transport, packet.senderPubkey);
+        }
       } catch (e) {
         debugPrint('[noise] Dropping handshake packet: $e');
       }
@@ -3790,15 +3828,22 @@ class GrassrootsNetwork {
         }
       }
 
-      // Note: onPeerConnected AND onPeerDiscovered for fresh reachability
-      // are intentionally NOT fired here — both are driven by the
-      // reachability subscriber, which fires on every false→true transition
-      // of `PeerState.isReachable`. That correctly handles re-discovery of
-      // a previously-known peer who went out of range and came back (the
-      // `isNew` flag here would be false in that case because we never
-      // remove friend PeerStates and may still have a non-friend's). We
-      // still fire onPeerUpdated on subsequent ANNOUNCEs for callers that
-      // want every update regardless of reachability transitions.
+      // onPeerDiscovered is the identity-learned event: a peer's public key and
+      // nickname arrive in the signed ANNOUNCE, which is sent in the clear and
+      // precedes the Noise session. Because onPeerConnected is gated on an
+      // authenticated Noise session (see processReachabilityTransitions),
+      // discovery strictly precedes connection — so we surface it here, once per
+      // identity, rather than coupling it to the reachability transition. The
+      // rendezvous server is infrastructure, not a discoverable peer.
+      if (!_isRendezvousPubkeyHex(pubkeyHex) &&
+          _discoveredPubkeyHexes.add(pubkeyHex)) {
+        onPeerDiscovered?.call(data.publicKey, data.nickname);
+      }
+
+      // onPeerConnected is driven by the reachability subscriber (it fires once
+      // the peer is reachable = an authenticated Noise session exists). We still
+      // fire onPeerUpdated on subsequent ANNOUNCEs for callers that want every
+      // update regardless of reachability transitions.
       final peerState = store.state.peers.getPeerByPubkey(data.publicKey);
       if (peerState != null && !isNew) {
         onPeerUpdated?.call(peerState);
@@ -4061,7 +4106,6 @@ class GrassrootsNetwork {
       lastKnownReachability: _lastKnownReachability,
       onConnected: onPeerConnected,
       onDisconnected: onPeerDisconnected,
-      onDiscovered: onPeerDiscovered,
     );
   }
 
@@ -4271,12 +4315,26 @@ class GrassrootsNetwork {
           _onUdpPeerDisconnected(disconnectedPeer);
         }
       }
-      store.dispatch(
-        PeerUdpConnectionChangedAction(
-          pubkeyHex: event.peerId,
-          connected: event.connected,
-        ),
-      );
+      if (!event.connected) {
+        // Disconnect is immediate — drop reachability now.
+        store.dispatch(
+          PeerUdpConnectionChangedAction(
+            pubkeyHex: event.peerId,
+            connected: false,
+          ),
+        );
+      } else if (_isRendezvousPubkeyHex(event.peerId)) {
+        // The rendezvous server runs no Noise handshake, so its raw UDX
+        // connection is its reachability (gate exemption). Real peers become
+        // reachable only once their Noise session authenticates — see
+        // [_onNoiseSessionEstablished].
+        store.dispatch(
+          PeerUdpConnectionChangedAction(
+            pubkeyHex: event.peerId,
+            connected: true,
+          ),
+        );
+      }
       if (event.connected) {
         _drainQueuedMessagesForPeer(_hexToBytes(event.peerId));
       }
@@ -4875,9 +4933,9 @@ class GrassrootsNetwork {
 ///
 /// Semantics:
 ///   - previous absent (treated as `false`) or `false` → current `true`:
-///     fire [onDiscovered] (per the spec, "callback when a new peer is
-///     detected" — repeatable for re-discovery after the peer went out of
-///     range) AND [onConnected] with the current `PeerState`.
+///     fire [onConnected] with the current `PeerState`. (Discovery —
+///     onPeerDiscovered — is surfaced separately at ANNOUNCE receipt, because a
+///     peer's identity is known before its Noise session authenticates.)
 ///   - previous `true` → current `false`: fire [onDisconnected].
 ///   - reachable peer removed from [peersState.peersList] entirely
 ///     (e.g. PeerRemovedAction): fire [onDisconnected] with a minimal
@@ -4891,7 +4949,6 @@ void processReachabilityTransitions({
   required Map<String, bool> lastKnownReachability,
   required void Function(PeerState peer)? onConnected,
   required void Function(PeerState peer)? onDisconnected,
-  void Function(Uint8List publicKey, String nickname)? onDiscovered,
 }) {
   final seenPubkeys = <String>{};
 
@@ -4903,7 +4960,6 @@ void processReachabilityTransitions({
     if (previous == current) continue;
     lastKnownReachability[pk] = current;
     if (current) {
-      onDiscovered?.call(peer.publicKey, peer.nickname);
       onConnected?.call(peer);
     } else {
       onDisconnected?.call(peer);

@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:grassroots_networking/grassroots_networking.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:logger/logger.dart' show Logger, Level;
 import 'src/debug/log_buffer.dart';
@@ -10,10 +9,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:redux/redux.dart';
 import 'package:flutter_redux/flutter_redux.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:sodium_libs/sodium_libs.dart';
-import 'dart:convert';
+import 'package:sodium_libs/sodium_libs_sumo.dart';
 import 'dart:async';
-import 'package:cryptography/cryptography.dart';
 import 'chat_screen.dart';
 import 'chat_models.dart';
 import 'settings_screen.dart';
@@ -39,39 +36,24 @@ late final PersistenceService persistenceService;
 // Global libsodium handle, initialized at app startup. Used by ProtocolHandler
 // for native Ed25519 sign on the main isolate; verifier worker isolates
 // initialize their own Sodium handles independently.
-late final Sodium appSodium;
+late final SodiumSumo appSodium;
 
 Future<GrassrootsIdentity> _initIdentity() async {
-  const storage = FlutterSecureStorage();
-  var identityValue = await storage.read(key: 'identity');
-  if (identityValue == null) {
-    debugPrint('No identity found, generating new one.');
-    final algorithm = Ed25519();
-    final keyPair = await algorithm.newKeyPair();
-    final seed = await keyPair.extractPrivateKeyBytes(); // 32-byte seed
-    final publicKey = await keyPair.extractPublicKey();
-    final publicKeyBytes = publicKey.bytes;
-
-    // Ed25519 private key format: seed (32 bytes) + public key (32 bytes) = 64 bytes
-    final privateKey64 = Uint8List.fromList([...seed, ...publicKeyBytes]);
-
-    String nickname =
-        'User_${publicKeyBytes.sublist(0, 4).map((b) => b.toRadixString(16).padLeft(2, '0')).join()}';
-
-    var id = await GrassrootsIdentity.create(
-      keyPair: keyPair,
-      nickname: nickname,
-    );
-
-    identityValue = jsonEncode(id.toJson());
-    await storage.write(key: 'identity', value: identityValue);
-  } else {
+  // Spec putIdentity/getIdentity (docs/GLP_Networking_API/sections/api.tex
+  // §Identity): restore the persisted identity, or generate-and-persist one on
+  // first launch so the same Ed25519 key pair is reused every session.
+  final existing = await IdentityStore.getIdentity();
+  if (existing != null) {
     debugPrint('Identity found in secure storage.');
+    debugPrint('Private Key Bytes (Seed): ${existing.privateKey.length} bytes');
+    debugPrint('Public Key Bytes: ${existing.publicKey.length} bytes');
+    debugPrint('Nickname: ${existing.nickname}');
+    return existing;
   }
 
-  final GrassrootsIdentity identity =
-      GrassrootsIdentity.fromMap(jsonDecode(identityValue));
-
+  debugPrint('No identity found, generating new one.');
+  final identity = await GrassrootsIdentity.generate();
+  await IdentityStore.putIdentity(identity);
   debugPrint('Private Key Bytes (Seed): ${identity.privateKey.length} bytes');
   debugPrint('Public Key Bytes: ${identity.publicKey.length} bytes');
   debugPrint('Nickname: ${identity.nickname}');
@@ -270,10 +252,11 @@ void main() async {
   // This feeds the Debug Logs screen in Settings.
   _setupDebugLogCapture();
 
-  // Initialize libsodium once for the main isolate. Verifier worker isolates
-  // each call SodiumInit.init() themselves — the native binary loads once per
-  // process, but each isolate needs its own Dart-side FFI handle.
-  appSodium = await SodiumInit.init();
+  // Initialize libsodium (SUMO) once for the main isolate. SUMO is required for
+  // the Ed25519↔X25519 conversion used to derive/verify Noise static keys.
+  // Verifier worker isolates init their own (verify-only) handles — the native
+  // binary loads once per process, but each isolate needs its own FFI handle.
+  appSodium = await SodiumSumoInit.init();
 
   // Create persistence service and load persisted state
   persistenceService = PersistenceService();
@@ -2379,11 +2362,7 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
     await _grassroots!.updateNickname(newNickname);
 
     // Persist to secure storage
-    const storage = FlutterSecureStorage();
-    await storage.write(
-      key: 'identity',
-      value: jsonEncode(_identity!.toJson()),
-    );
+    await IdentityStore.putIdentity(_identity!);
 
     setState(() {});
 
@@ -2438,26 +2417,12 @@ class _GrassrootsHomeState extends State<GrassrootsHome>
     });
     await oldGrassroots?.dispose();
 
-    // Fresh keypair + nickname (same shape as _initIdentity for a clean install).
-    final algorithm = Ed25519();
-    final keyPair = await algorithm.newKeyPair();
-    final pk = await keyPair.extractPublicKey();
-    final pkBytes = Uint8List.fromList(pk.bytes);
-    final nickname =
-        'User_${pkBytes.sublist(0, 4).map((b) => b.toRadixString(16).padLeft(2, '0')).join()}';
-
-    final newIdentity = await GrassrootsIdentity.create(
-      keyPair: keyPair,
-      nickname: nickname,
-    );
+    // Fresh keypair (same shape as _initIdentity for a clean install).
+    final newIdentity = await GrassrootsIdentity.generate();
 
     // Persist immediately so a crash mid-restart doesn't leave us with a
     // stored identity that doesn't match anything in memory.
-    const storage = FlutterSecureStorage();
-    await storage.write(
-      key: 'identity',
-      value: jsonEncode(newIdentity.toJson()),
-    );
+    await IdentityStore.putIdentity(newIdentity);
 
     // Rebuild the transport with the new identity (mirrors _initialize).
     final newGrassroots = GrassrootsNetwork(

@@ -304,9 +304,24 @@ PeersState peersReducer(PeersState state, dynamic action) {
         isFriend: existing.isFriend,
         lastDirectReachAt: existing.lastDirectReachAt,
         hasLiveUdpConnection: existing.hasLiveUdpConnection,
+        // Clear BLE auth only when the last BLE path is gone; a partial drop
+        // (one role) leaves the Noise session intact.
+        bleAuthenticated: hasAnyBle ? existing.bleAuthenticated : false,
       );
       return state.copyWith(
         peers: Map.from(state.peers)..[pubkeyHex] = updated,
+      );
+    }
+    return state;
+  }
+
+  if (action is PeerBleAuthenticatedAction) {
+    final pubkeyHex = _pubkeyToHex(action.publicKey);
+    final existing = state.peers[pubkeyHex];
+    if (existing != null) {
+      return state.copyWith(
+        peers: Map.from(state.peers)
+          ..[pubkeyHex] = existing.copyWith(bleAuthenticated: true),
       );
     }
     return state;
@@ -365,6 +380,8 @@ PeersState peersReducer(PeersState state, dynamic action) {
         isFriend: existing.isFriend,
         lastDirectReachAt: existing.lastDirectReachAt,
         hasLiveUdpConnection: false,
+        // Transport independence: a UDP drop must not touch BLE auth.
+        bleAuthenticated: existing.bleAuthenticated,
       );
       return state.copyWith(
         peers: Map.from(state.peers)..[pubkeyHex] = updated,
@@ -470,6 +487,7 @@ PeersState peersReducer(PeersState state, dynamic action) {
         isFriend: existing.isFriend,
         lastDirectReachAt: preserveReach ? existing.lastDirectReachAt : null,
         hasLiveUdpConnection: existing.hasLiveUdpConnection,
+        bleAuthenticated: existing.bleAuthenticated,
       );
       return state.copyWith(
         peers: Map.from(state.peers)..[pubkeyHex] = updated,
@@ -564,6 +582,8 @@ PeersState peersReducer(PeersState state, dynamic action) {
         udpAddress: null,
         udpAddressCandidates: const {},
         lastDirectReachAt: null,
+        // Still nearby over BLE — keep the BLE auth state.
+        bleAuthenticated: existing.bleAuthenticated,
       );
       return state.copyWith(
         peers: Map.from(state.peers)..[pubkeyHex] = updated,

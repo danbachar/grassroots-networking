@@ -166,11 +166,19 @@ class PeerState {
   /// any prior observation was for a different network path.
   final DateTime? lastDirectReachAt;
 
-  /// Whether there is a live UDX connection to this peer.
-  /// Set true when UDX handshake completes, false when the stream closes.
-  /// Unlike [udpAddress] (which is preserved for reconnection), this reflects
-  /// the actual transport-level connection state right now.
+  /// Whether there is an authenticated UDP path to this peer — a live UDX
+  /// connection whose Noise XX session has completed. Set true when the Noise
+  /// handshake authenticates (not on the bare UDX connect), false when the
+  /// stream closes. Unlike [udpAddress] (preserved for reconnection), this
+  /// reflects the actual authenticated-connection state right now.
   final bool hasLiveUdpConnection;
+
+  /// Whether there is an authenticated BLE path to this peer — a live BLE link
+  /// whose Noise XX session has completed. Set true when the BLE Noise
+  /// handshake authenticates, cleared when the last BLE path drops. Distinct
+  /// from [hasBleConnection] (the raw link, set on ANNOUNCE so we can route the
+  /// handshake itself): a peer is only [isReachable] once authenticated.
+  final bool bleAuthenticated;
 
   const PeerState({
     required this.publicKey,
@@ -190,6 +198,7 @@ class PeerState {
     this.isFriend = false,
     this.lastDirectReachAt,
     this.hasLiveUdpConnection = false,
+    this.bleAuthenticated = false,
   });
 
   /// Hex representation of public key (for map keys)
@@ -241,11 +250,16 @@ class PeerState {
   /// least one globally routable UDP address.
   bool get isWellConnected => hasPublicUdpAddress;
 
-  /// Whether this peer is reachable right now via any live transport.
-  /// This is the canonical "can a send succeed without queueing" predicate
-  /// and the basis for the consolidated onPeerConnected/onPeerDisconnected
-  /// callbacks on [GrassrootsNetwork].
-  bool get isReachable => hasBleConnection || hasLiveUdpConnection;
+  /// Whether this peer is reachable right now via any *authenticated*
+  /// transport. This is the canonical "can a send succeed without queueing"
+  /// predicate and the basis for the consolidated
+  /// onPeerConnected/onPeerDisconnected callbacks on [GrassrootsNetwork].
+  ///
+  /// Reachability requires a completed Noise session — spec
+  /// `docs/GLP_Networking_API/sections/ip.tex` §IP Connection: connected fires
+  /// once the stream is "established and authenticated". A raw BLE/UDX link
+  /// without a session does not count as reachable.
+  bool get isReachable => bleAuthenticated || hasLiveUdpConnection;
 
   /// The currently active transport based on available connections.
   /// BLE is preferred when available; falls back to UDP, then stored value.
@@ -285,6 +299,7 @@ class PeerState {
     DateTime? lastDirectReachAt,
     bool clearLastDirectReachAt = false,
     bool? hasLiveUdpConnection,
+    bool? bleAuthenticated,
   }) {
     return PeerState(
       publicKey: publicKey ?? this.publicKey,
@@ -307,6 +322,7 @@ class PeerState {
           ? null
           : lastDirectReachAt ?? this.lastDirectReachAt,
       hasLiveUdpConnection: hasLiveUdpConnection ?? this.hasLiveUdpConnection,
+      bleAuthenticated: bleAuthenticated ?? this.bleAuthenticated,
     );
   }
 

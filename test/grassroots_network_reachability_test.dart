@@ -34,6 +34,8 @@ void main() {
         connectionState: PeerConnectionState.connected,
         transport: PeerTransport.bleDirect,
         bleCentralDeviceId: 'ble-$seed',
+        // Reachability now requires an authenticated (Noise) BLE session.
+        bleAuthenticated: true,
       );
 
   PeerState peerOnUdp(int seed) => PeerState(
@@ -51,6 +53,7 @@ void main() {
         connectionState: PeerConnectionState.connected,
         transport: PeerTransport.bleDirect,
         bleCentralDeviceId: 'ble-$seed',
+        bleAuthenticated: true,
         udpAddress: '10.0.0.$seed:9514',
         hasLiveUdpConnection: true,
       );
@@ -64,25 +67,21 @@ void main() {
 
   late List<Uint8List> connects;
   late List<Uint8List> disconnects;
-  late List<(Uint8List, String)> discoveries;
   late Map<String, bool> tracker;
 
   void onConnected(PeerState p) => connects.add(p.publicKey);
   void onDisconnected(PeerState p) => disconnects.add(p.publicKey);
-  void onDiscovered(Uint8List pk, String nick) => discoveries.add((pk, nick));
 
   void tick(PeersState s) => processReachabilityTransitions(
         peersState: s,
         lastKnownReachability: tracker,
         onConnected: onConnected,
         onDisconnected: onDisconnected,
-        onDiscovered: onDiscovered,
       );
 
   setUp(() {
     connects = [];
     disconnects = [];
-    discoveries = [];
     tracker = {};
   });
 
@@ -181,50 +180,8 @@ void main() {
     });
   });
 
-  group('onPeerDiscovered', () {
-    test('fires on first reachability acquisition with pubkey + nickname', () {
-      tick(stateWith([peerOnBle(1)]));
-      expect(discoveries.length, 1);
-      expect(discoveries.single.$1, pubkey(1));
-      expect(discoveries.single.$2, 'P1');
-    });
-
-    test('fires AGAIN on re-discovery after going out of range', () {
-      // Initial discovery + connect.
-      tick(stateWith([peerOnBle(1)]));
-      expect(discoveries.length, 1);
-      expect(connects.length, 1);
-
-      // Peer goes out of range — PeerState stays in store (e.g. friend, or
-      // not yet stale-cleaned) but isReachable flips false.
-      tick(stateWith([peerOffline(1)]));
-      expect(disconnects.length, 1);
-      expect(discoveries.length, 1, reason: 'no re-discovery while offline');
-
-      // Peer comes back in range — same PeerState, isReachable flips true.
-      tick(stateWith([peerOnBle(1)]));
-      expect(discoveries.length, 2,
-          reason: 'onPeerDiscovered must repeat on re-discovery');
-      expect(connects.length, 2);
-    });
-
-    test('does NOT fire while peer stays reachable across ticks', () {
-      tick(stateWith([peerOnBle(1)]));
-      tick(stateWith([peerOnBoth(1)])); // gained UDP, still reachable
-      tick(stateWith([peerOnUdp(1)])); // lost BLE, still reachable
-      expect(discoveries.length, 1,
-          reason: 'no flipping false→true → no re-fire');
-    });
-
-    test('null onDiscovered callback is safe', () {
-      processReachabilityTransitions(
-        peersState: stateWith([peerOnBle(1)]),
-        lastKnownReachability: tracker,
-        onConnected: onConnected,
-        onDisconnected: onDisconnected,
-        onDiscovered: null,
-      );
-      expect(connects.length, 1);
-    });
-  });
+  // onPeerDiscovered is no longer driven by reachability transitions — it now
+  // fires at ANNOUNCE receipt (identity learned, ahead of the Noise session),
+  // decoupled from onPeerConnected. See GrassrootsNetwork._setupRouterCallbacks
+  // (onPeerAnnounced) and the api.tex onPeerDiscovered note.
 }
