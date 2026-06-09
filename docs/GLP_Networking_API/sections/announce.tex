@@ -1,0 +1,56 @@
+%==============================================================================
+\section{The ANNOUNCE Cycle}
+\label{sec:announce}
+%==============================================================================
+ANNOUNCE is the periodic presence packet that underlies discovery, identification, and address maintenance across both media. It is the same signed packet whether it travels over BLE (Section~\ref{sec:ble}) or IP (Section~\ref{sec:ip}); the medium only changes how it is delivered. The control plane runs two logical ANNOUNCE cycles over this one packet: an \emph{identity-metadata exchange} that any two agents complete on first contact, and a \emph{friend address exchange} that authenticated friends use to keep each other's reachability current.
+
+Each agent re-emits ANNOUNCE on a fixed interval (10\,s by default) to every peer it is connected to: directed to each connected BLE device, and broadcast to every connected IP peer. Emission is strictly cycle-driven --- it fires on the timer, not on connection-established events --- so that a single mechanism governs presence and an agent that has gone silent can be detected by the \emph{absence} of expected ANNOUNCEs rather than by inference.
+
+%------------------------------------------------------------------------------
+\subsection{Payload}
+\label{sec:announce-payload}
+%------------------------------------------------------------------------------
+The ANNOUNCE payload is carried in a packet that is signed by the sender's Ed25519 private key, so receipt of a valid ANNOUNCE authenticates the sender as the holder of the advertised public key. The payload contains:
+\begin{longtable}{L{3.5cm} L{3cm} L{6.5cm}}
+\toprule
+\rowcolor{headerblue}
+\textcolor{white}{\textbf{Field}} &
+\textcolor{white}{\textbf{Size}} &
+\textcolor{white}{\textbf{Meaning}} \\
+\midrule
+\endhead
+Public key & 32 bytes & The sender's Ed25519 public key --- its globally unique identity (Section~\ref{sec:identity}). \\
+\rowcolor{rowgray}
+Protocol version & 2 bytes & Wire-format version of the ANNOUNCE. \\
+Nickname & 1-byte length + bytes & Human-readable display name. Cosmetic only; all trust decisions flow from the public key. \\
+\rowcolor{rowgray}
+Address candidates & 2-byte count + repeated (2-byte length + bytes) & The sender's reachable IP address candidates --- its public UDP address and, where applicable, a link-local address. May be empty. \\
+\bottomrule
+\end{longtable}
+
+The address-candidate set is the only optional content, and its presence is what distinguishes the two cycles.
+
+%------------------------------------------------------------------------------
+\subsection{Identity-Only vs. Friend ANNOUNCE}
+\label{sec:announce-variants}
+%------------------------------------------------------------------------------
+The address candidates are friend-only metadata, gated by the same trust boundary as the rest of the protocol:
+\begin{itemize}
+\item An \textbf{identity-only ANNOUNCE} carries the public key, version, and nickname but \emph{no} address candidates. This is what an agent sends to peers that are not authenticated, accepted friends --- including unknown nearby BLE devices surfaced as cold calls in the Open trust level (Section~\ref{sec:cold-call-trust}), and devices recognized only by their derived service UUID that have not yet completed a signed ANNOUNCE. It reveals identity but never location.
+\item A \textbf{friend ANNOUNCE} additionally carries the sender's address candidates. It is sent only to authenticated, accepted friends. A spoofed or merely-recognized service UUID never unlocks address metadata; the recipient must have proven friendship through a prior signed ANNOUNCE.
+\end{itemize}
+This realizes the first cycle of the control plane (identity-metadata exchange on first contact) and the second (friends exchanging IP addresses once friendship is established).
+
+%------------------------------------------------------------------------------
+\subsection{What the Cycle Drives}
+\label{sec:announce-drives}
+%------------------------------------------------------------------------------
+Receiving an ANNOUNCE is the event that drives most of the networking layer's peer state:
+\begin{itemize}
+\item \textbf{Identification.} The ANNOUNCE binds a transport-level handle (a BLE device or an IP session) to a public key and nickname. The first ANNOUNCE from a peer promotes it from a discovered device to an identified peer and surfaces \func{onPeerConnected} (Section~\ref{sec:discovery}).
+\item \textbf{Authentication.} The signature proves the sender holds the private key for the advertised public key, satisfying the authentication assumption (Section~\ref{sec:assumptions}). In the Closed trust level, an agent declines to complete the ANNOUNCE exchange with unknown nearby devices (Section~\ref{sec:cold-call-trust}).
+\item \textbf{Address learning and persistence.} A friend's advertised address candidates become that friend's last-known location, used to reach them later. An address is updated when a newer ANNOUNCE supplies one and is never unilaterally cleared by the recipient.
+\item \textbf{Presence and liveness.} Each received ANNOUNCE refreshes the sender's last-seen time, tracked independently per medium. Missing roughly two ANNOUNCE intervals is the explicit signal that ages a peer out or tears down a quiet IP session --- an event surfaced by the transport layer, not inferred from silence. A loss of presence on one medium never degrades the peer's state on the other (transport independence).
+\item \textbf{Transport activation.} When a friend's ANNOUNCE arrives over any medium carrying an IP address, the two agents may bring up an IP path so both transports run at once; to avoid a simultaneous-open race, the agent with the lexicographically smaller public key initiates and the other waits. This is followed by the UDX and Noise~XX handshake of Section~\ref{sec:ip-connection}.
+\item \textbf{Rendezvous signaling.} A well-connected agent records a friend's address from the friend's ANNOUNCE into its address table, preferring the NAT-translated address it observes on an incoming IP packet over the address the friend claims. These records are what let it act as a signaling relay for friends-based rendezvous and hole-punching (Section~\ref{sec:addr-maintenance}, Section~\ref{sec:friends-rv-protocol}). Addresses are recorded only for friends.
+\end{itemize}
