@@ -30,6 +30,14 @@ The boundary: the queue lives on the sender, holds only the sender's own message
 
 Every device advertises a public-key-derived Grassroots service UUID: a fixed Grassroots prefix plus the first 8 bytes of SHA-256(public key). The UUID is only a discovery hint, never an authorization proof. Identity is established by the signed ANNOUNCE handshake, which carries the full public key, nickname, and signature. In open cold-call mode, nearby unknown BLE peers may complete ANNOUNCE; in closed mode, unknown nearby peers do not get ANNOUNCE, and friend-only metadata is sent only after signed ANNOUNCE authenticates an accepted friend.
 
+## Dual-Role BLE Is Mandatory
+
+Every BLE pair must converge to a **dual-role connection**: two GATT legs, with each device central on one leg and peripheral on the other. Never ship a design that intentionally leaves a pair single-link. This requirement is inviolable.
+
+Platform asymmetries are solved by choosing **who initiates each leg** — ordering, advertisement markers, pair reform — never by abandoning a leg. The one measured constraint (an iOS central cannot open the *second* link toward an Android it is already linked with; the connect wedges in `connecting` until timeout) is routed around by making iOS open the pair's *first* leg and the Android the reverse leg. iOS devices advertise the fixed `grs-ios` local name so peers can yield the first dial to them.
+
+When a platform behavior is **unknown** (e.g. whether an iOS↔iOS reverse leg works), attempt it and let hardware decide — do not suppress it on extrapolation. A single-link pair is acceptable only as a *transient* state that the transport keeps trying to upgrade, or where hardware has *measurably* refused the second leg and the only remaining lever is initiator order.
+
 ## Well-Connected Friends & Hole-Punching
 
 Most mobile devices sit behind NAT and cannot accept incoming UDP connections from the public Internet. A **well-connected** device is one that has a globally routable public address — it can be reached directly by anyone.

@@ -29,9 +29,11 @@ class MessageRouter {
   final FragmentHandler fragmentHandler;
   final BloomFilter _seenPackets = BloomFilter();
 
-  /// Called when a message is received
-  void Function(String id, Uint8List senderPubkey, Uint8List payload)?
-      onMessageReceived;
+  /// Called when a message is received. [transport] is the transport the packet
+  /// actually arrived on — authoritative, taken from the receive path rather
+  /// than inferred from peer state.
+  void Function(String id, Uint8List senderPubkey, Uint8List payload,
+      PeerTransport transport)? onMessageReceived;
 
   /// Called when an ACK is received (delivery confirmation)
   void Function(String messageId)? onAckReceived;
@@ -391,7 +393,7 @@ class MessageRouter {
     final firstSeen = !_seenPackets.checkAndAdd(packet.packetId);
     if (firstSeen) {
       onMessageReceived?.call(
-          packet.packetId, packet.senderPubkey, packet.payload);
+          packet.packetId, packet.senderPubkey, packet.payload, transport);
     } else {
       debugPrint(
         'Duplicate message ${packet.packetId.length >= 8 ? packet.packetId.substring(0, 8) : packet.packetId}; '

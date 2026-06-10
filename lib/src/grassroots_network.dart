@@ -6,6 +6,7 @@ import 'package:redux/redux.dart';
 import 'package:sodium_libs/sodium_libs_sumo.dart';
 import 'package:uuid/uuid.dart';
 import 'ble/permission_handler.dart';
+import 'platform/transport_foreground_service.dart';
 import 'signaling/signaling_codec.dart';
 import 'signaling/signaling_service.dart';
 import 'transport/address_utils.dart';
@@ -176,6 +177,62 @@ bool shouldAcceptRendezvousReply(
   }
 
   return false;
+}
+
+/// Whether a settings change that just brought a transport up must complete a
+/// deferred [GrassrootsNetwork.start].
+///
+/// The wedge this guards against: with `autoStart` on, the first `initialize()`
+/// can still find no usable transport (e.g. BLE permission denied and UDP off),
+/// in which case it returns without ever calling `start()`, leaving `_started`
+/// false. When the user later enables a transport from settings, the service
+/// initializes but the warm-path per-transport `start()` calls are gated on the
+/// stack already being started — so without this the transport is live but
+/// inert (no advertising, scanning, or announce/scan timers) until the app
+/// restarts.
+///
+/// True only when auto-start was requested, nothing was started yet, and a
+/// transport is now usable. With `autoStart` off the caller manages `start()`
+/// itself, so an unrelated settings change must not start on its behalf; the
+/// disable paths (no transport available) and the warm path (already started)
+/// also return false.
+@visibleForTesting
+bool shouldColdStartAfterSettingsChange({
+  required bool autoStart,
+  required bool wasStarted,
+  required bool startedNow,
+  required bool bleAvailable,
+  required bool udpAvailable,
+}) =>
+    autoStart && !wasStarted && !startedNow && (bleAvailable || udpAvailable);
+
+/// Actions that mirror an accepted friend's live UDP address (peers slice,
+/// which is not persisted) into the friendship record (which is), so the
+/// last-known address survives an app restart and can seed reconnection —
+/// the hydration path in `main.dart` re-associates it on startup.
+///
+/// One action per friend whose live address differs from the stored one.
+/// A friend with no live address produces nothing: the stored address is the
+/// peer's last known location and is never cleared unilaterally (CLAUDE.md
+/// "Peer Address Persistence" — only an explicit peer report may clear it).
+@visibleForTesting
+List<UpdateFriendshipUdpAddressAction> computeFriendUdpAddressMirrorActions({
+  required FriendshipsState friendships,
+  required PeersState peers,
+}) {
+  final actions = <UpdateFriendshipUdpAddressAction>[];
+  for (final friendship in friendships.friends) {
+    final peer =
+        peers.getPeerByPubkeyHex(friendship.peerPubkeyHex.toLowerCase());
+    final address = peer?.udpAddress;
+    if (address == null || address.isEmpty) continue;
+    if (address == friendship.udpAddress) continue;
+    actions.add(UpdateFriendshipUdpAddressAction(
+      peerPubkeyHex: friendship.peerPubkeyHex,
+      udpAddress: address,
+    ));
+  }
+  return actions;
 }
 
 @visibleForTesting
@@ -452,7 +509,8 @@ class GrassrootsNetwork {
   // ===== Public callbacks =====
 
   /// Called when an application message is received.
-  /// Parameters: messageId, senderPubkey, payload (raw GSG block data), transport
+  /// Parameters: messageId, senderPubkey, payload (raw GSG block data),
+  /// transport (the transport the message actually arrived on).
   void Function(
     String messageId,
     Uint8List senderPubkey,
@@ -467,9 +525,8 @@ class GrassrootsNetwork {
   /// when you only need the sender's pubkey and payload. The richer
   /// [onMessageReceived] variant additionally provides a transport-assigned
   /// `messageId` (useful for dedup / ACK correlation; also dispatched via the
-  /// Redux `MessageReceivedAction`) and the peer's currently preferred
-  /// transport at delivery time (for logging only — not authoritative for
-  /// the arrival transport).
+  /// Redux `MessageReceivedAction`) and the transport the message actually
+  /// arrived on (taken from the receive path).
   void Function(Uint8List senderPubkey, Uint8List payload)? onReceive;
 
   /// Spec: `docs/GLP_Networking_API/sections/api.tex` §onPeerDiscovered.
@@ -551,6 +608,18 @@ class GrassrootsNetwork {
       if (!setEquals(friendPubkeyHexes, _lastFriendPubkeyHexes)) {
         _lastFriendPubkeyHexes = friendPubkeyHexes;
         _broadcastFriendListToFriends(reason: 'friendship changed');
+      }
+      // Mirror friends' live UDP addresses into the persisted friendship
+      // records so the last-known address survives restart. Converges in one
+      // extra change notification: the mirror dispatch updates the friendship,
+      // after which the addresses compare equal and no further action is
+      // produced. (onChange is an async broadcast stream, so dispatching here
+      // is not reentrant.)
+      for (final action in computeFriendUdpAddressMirrorActions(
+        friendships: state.friendships,
+        peers: state.peers,
+      )) {
+        store.dispatch(action);
       }
       _processReachabilityTransitions(state.peers);
     });
@@ -867,6 +936,10 @@ class GrassrootsNetwork {
     }
 
     _started = true;
+    // Keep the Android process unfrozen while transports run — a frozen Dart
+    // VM goes ANNOUNCE-silent and never dials reverse BLE legs, while its
+    // radio links stay up (peers then flap us through their stale sweeps).
+    unawaited(TransportForegroundService.start());
     _startAnnounceTimer();
     _startScanTimer();
     if (_udpAvailable) {
@@ -881,6 +954,7 @@ class GrassrootsNetwork {
 
     debugPrint('Stopping Grassroots transport');
     _started = false;
+    unawaited(TransportForegroundService.stop());
     _announceTimer?.cancel();
     _announceTimer = null;
     _scanTimer?.cancel();
@@ -1708,6 +1782,30 @@ class GrassrootsNetwork {
       }
 
       debugPrint('UDP cleanup complete');
+    }
+
+    // Cold-start recovery: if the transport was never started (e.g. the first
+    // initialize() found no usable transport because BLE permission was denied
+    // and UDP was off, so it returned without calling start()) and a transport
+    // has now come up via this settings change, do a full start. Otherwise the
+    // service is live but inert — no advertising, no scanning, no announce/scan
+    // timers, no started flag — until the app restarts. The per-transport
+    // start() calls above only cover the warm path (wasStarted == true); start()
+    // itself is guarded by _started, so this cannot double-start.
+    if (shouldColdStartAfterSettingsChange(
+      autoStart: config.autoStart,
+      wasStarted: wasStarted,
+      startedNow: _started,
+      bleAvailable: _bleAvailable,
+      udpAvailable: _udpAvailable,
+    )) {
+      debugPrint(
+        'Transport came up from settings while never started — starting now',
+      );
+      await start();
+      if (_udpAvailable) {
+        await _reconnectUdpFriends(reason: 'settings-enabled-cold-start');
+      }
     }
 
     await _handleRendezvousSettingsChange(
@@ -3636,9 +3734,11 @@ class GrassrootsNetwork {
   /// Set up MessageRouter callbacks to dispatch to Redux and application layer
   void _setupRouterCallbacks() {
     // Message received from any transport
-    _messageRouter.onMessageReceived = (messageId, senderPubkey, payload) {
-      final peer = store.state.peers.getPeerByPubkey(senderPubkey);
-      final transport = peer?.activeTransport == PeerTransport.udp
+    _messageRouter.onMessageReceived =
+        (messageId, senderPubkey, payload, arrivalTransport) {
+      // Authoritative arrival transport from the receive path (not inferred
+      // from the peer's preferred/active transport).
+      final transport = arrivalTransport == PeerTransport.udp
           ? MessageTransport.udp
           : MessageTransport.ble;
 
@@ -4884,6 +4984,23 @@ class GrassrootsNetwork {
         '[ble-stale] No BLE traffic from ${peer.displayName} for '
         '${staleThreshold.inSeconds}s; synthesizing disconnect',
       );
+      // Redux is a strict projection of transport facts — so when we
+      // synthesize a disconnect, make it a fact: physically tear down any
+      // plugin paths still attached to this peer. An ANNOUNCE-quiet link is
+      // often still alive at the radio level; clearing only the Redux
+      // attachment blinds the identity-keyed dial guards, and the recovery
+      // dial then opens a doomed SECOND link to a device we are still
+      // linked with (20s connecting-wedge on iOS, GATT-133 churn on
+      // Android). Tearing the radio down first makes the recovery dial a
+      // legitimate first link.
+      final centralId = peer.bleCentralDeviceId;
+      if (centralId != null) {
+        unawaited(_bleService?.disconnectDevice(centralId, forget: true));
+      }
+      final peripheralId = peer.blePeripheralDeviceId;
+      if (peripheralId != null) {
+        unawaited(_bleService?.disconnectDevice(peripheralId, forget: true));
+      }
       // role: null clears both central and peripheral attachments.
       store.dispatch(PeerBleDisconnectedAction(peer.publicKey));
     }
