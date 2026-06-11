@@ -242,12 +242,14 @@ void main() {
     group('SetColdCallTrustLevelAction', () {
       test('updates cold-call trust level', () {
         const state = SettingsState.initial;
+        // The initial default is Closed (paper sec:ble-trust), so set Open to
+        // exercise a real transition.
         final result = settingsReducer(
           state,
-          SetColdCallTrustLevelAction(ColdCallTrustLevel.closed),
+          SetColdCallTrustLevelAction(ColdCallTrustLevel.open),
         );
 
-        expect(result.coldCallTrustLevel, ColdCallTrustLevel.closed);
+        expect(result.coldCallTrustLevel, ColdCallTrustLevel.open);
         expect(result.bluetoothEnabled, state.bluetoothEnabled);
         expect(result.udpEnabled, state.udpEnabled);
       });
