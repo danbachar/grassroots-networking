@@ -106,7 +106,6 @@ void main() {
       // Verify Bob decoded Alice's announce correctly
       expect(receivedAnnounce, isNotNull);
       expect(receivedAnnounce!.publicKey, equals(aliceIdentity.publicKey));
-      expect(receivedAnnounce!.nickname, equals('Alice'));
       expect(receivedAnnounce!.protocolVersion, equals(1));
       expect(receivedTransport, equals(PeerTransport.bleDirect));
 
@@ -114,8 +113,7 @@ void main() {
       final peerState =
           bobStore.state.peers.getPeerByPubkey(aliceIdentity.publicKey);
       expect(peerState, isNotNull);
-      expect(peerState!.nickname, equals('Alice'));
-      expect(peerState.transport, equals(PeerTransport.bleDirect));
+      expect(peerState!.transport, equals(PeerTransport.bleDirect));
       expect(peerState.rssi, equals(-50));
     });
 
@@ -297,7 +295,6 @@ void main() {
 
       expect(receivedAnnounce, isNotNull);
       expect(receivedAnnounce!.publicKey, equals(aliceIdentity.publicKey));
-      expect(receivedAnnounce!.nickname, equals('Alice'));
       expect(receivedAnnounce!.protocolVersion, equals(1));
       expect(receivedTransport, equals(PeerTransport.udp));
 
@@ -305,8 +302,7 @@ void main() {
       final peerState =
           bobStore.state.peers.getPeerByPubkey(aliceIdentity.publicKey);
       expect(peerState, isNotNull);
-      expect(peerState!.nickname, equals('Alice'));
-      expect(peerState.transport, equals(PeerTransport.udp));
+      expect(peerState!.transport, equals(PeerTransport.udp));
     });
 
     test('UDP ANNOUNCE with address roundtrips correctly', () async {
@@ -577,8 +573,6 @@ void main() {
           bobStore.state.peers.getPeerByPubkey(aliceIdentity.publicKey);
       expect(bobInAliceStore, isNotNull);
       expect(aliceInBobStore, isNotNull);
-      expect(bobInAliceStore!.nickname, equals('Bob'));
-      expect(aliceInBobStore!.nickname, equals('Alice'));
 
       // Alice sends message to Bob
       final helloPayload = Uint8List.fromList('hello bob'.codeUnits);

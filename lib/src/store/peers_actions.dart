@@ -89,7 +89,6 @@ class ClearDiscoveredBlePeersAction extends PeerAction {}
 /// per action, based on which BLE role our device played.
 class PeerAnnounceReceivedAction extends PeerAction {
   final Uint8List publicKey;
-  final String nickname;
   final int protocolVersion;
 
   /// BLE signal strength in dBm. Non-null only when the ANNOUNCE arrived over
@@ -111,7 +110,6 @@ class PeerAnnounceReceivedAction extends PeerAction {
 
   PeerAnnounceReceivedAction({
     required this.publicKey,
-    required this.nickname,
     required this.protocolVersion,
     this.rssi,
     this.transport = PeerTransport.bleDirect,

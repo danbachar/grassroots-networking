@@ -33,12 +33,11 @@ void main() {
     });
 
     group('createAnnouncePayload', () {
-      test('encodes public key, version, and nickname correctly', () {
+      test('encodes public key and version correctly', () {
         final payload = handler.createAnnouncePayload();
 
         // Verify payload structure
-        expect(payload.length,
-            greaterThanOrEqualTo(32 + 2 + 1 + 'TestUser'.length + 2));
+        expect(payload.length, greaterThanOrEqualTo(32 + 2 + 2));
 
         // Public key (first 32 bytes)
         final pubkeyFromPayload = payload.sublist(0, 32);
@@ -49,20 +48,13 @@ void main() {
             ByteData.view(payload.buffer, payload.offsetInBytes + 32, 2);
         final version = versionData.getUint16(0, Endian.big);
         expect(version, equals(1)); // Protocol version 1
-
-        // Nickname length and nickname
-        final nickLen = payload[34];
-        expect(nickLen, equals('TestUser'.length));
-        final nickname =
-            String.fromCharCodes(payload.sublist(35, 35 + nickLen));
-        expect(nickname, equals('TestUser'));
       });
 
       test('creates payload without candidates when not provided', () {
         final payload = handler.createAnnouncePayload();
 
-        // Candidate count should be 0 after the nickname.
-        const offset = 32 + 2 + 1 + 'TestUser'.length;
+        // Candidate count follows pubkey + version directly.
+        const offset = 32 + 2;
         final candidateCountData =
             ByteData.view(payload.buffer, payload.offsetInBytes + offset, 2);
         final candidateCount = candidateCountData.getUint16(0, Endian.big);
@@ -76,24 +68,6 @@ void main() {
 
         expect(decoded.udpAddress, equals(testAddress));
         expect(decoded.addressCandidates, equals({testAddress}));
-      });
-
-      test('handles empty nickname', () async {
-        final algorithm = Ed25519();
-        final keyPair = await algorithm.newKeyPair();
-        final emptyNickIdentity = await GrassrootsIdentity.create(
-          keyPair: keyPair,
-          nickname: '',
-        );
-        final emptyHandler =
-            ProtocolHandler(identity: emptyNickIdentity, sodium: sodium);
-
-        final payload = emptyHandler.createAnnouncePayload();
-
-        // Should have valid structure with 0-length nickname.
-        // pubkey + version + nickLen(0) + candidateCount(0)
-        expect(payload.length, equals(32 + 2 + 1 + 2));
-        expect(payload[34], equals(0)); // nickname length = 0
       });
 
       test('includes UDP address candidates when provided', () {
@@ -122,7 +96,6 @@ void main() {
         final decoded = handler.decodeAnnounce(payload);
 
         expect(decoded.publicKey, equals(testIdentity.publicKey));
-        expect(decoded.nickname, equals('TestUser'));
         expect(decoded.protocolVersion, equals(1));
         expect(decoded.udpAddress, isNull);
         expect(decoded.addressCandidates, isEmpty);
@@ -134,15 +107,14 @@ void main() {
         final decoded = handler.decodeAnnounce(payload);
 
         expect(decoded.publicKey, equals(testIdentity.publicKey));
-        expect(decoded.nickname, equals('TestUser'));
         expect(decoded.protocolVersion, equals(1));
         expect(decoded.udpAddress, equals(testAddress));
         expect(decoded.addressCandidates, contains(testAddress));
       });
 
       test('throws when candidate set is missing', () {
-        final nicknameBytes = utf8.encode('MalformedPeer');
-        final buffer = ByteData(32 + 2 + 1 + nicknameBytes.length);
+        // pubkey(32) + version(2), but no candidate count.
+        final buffer = ByteData(32 + 2);
         var offset = 0;
 
         buffer.buffer
@@ -151,12 +123,6 @@ void main() {
         offset += 32;
 
         buffer.setUint16(offset, 1, Endian.big);
-        offset += 2;
-
-        buffer.setUint8(offset++, nicknameBytes.length);
-        buffer.buffer
-            .asUint8List()
-            .setRange(offset, offset + nicknameBytes.length, nicknameBytes);
 
         final payload = buffer.buffer.asUint8List();
         expect(
@@ -165,9 +131,9 @@ void main() {
         );
       });
 
-      test('handles empty nickname in payload', () {
-        // pubkey(32) + version(2) + nickLen(1) + candidateCount(2)
-        final buffer = ByteData(32 + 2 + 1 + 2);
+      test('decodes minimal payload with no candidates', () {
+        // pubkey(32) + version(2) + candidateCount(2)
+        final buffer = ByteData(32 + 2 + 2);
         var offset = 0;
 
         // Public key
@@ -180,16 +146,13 @@ void main() {
         buffer.setUint16(offset, 1, Endian.big);
         offset += 2;
 
-        // Nickname length = 0
-        buffer.setUint8(offset++, 0);
-
         // Candidate count = 0
         buffer.setUint16(offset, 0, Endian.big);
 
         final payload = buffer.buffer.asUint8List();
         final decoded = handler.decodeAnnounce(payload);
 
-        expect(decoded.nickname, equals(''));
+        expect(decoded.publicKey, equals(testIdentity.publicKey));
         expect(decoded.udpAddress, isNull);
         expect(decoded.addressCandidates, isEmpty);
       });
@@ -440,7 +403,7 @@ void main() {
         final reEncodedIdentity = GrassrootsIdentity.fromMap({
           'publicKey': decoded.publicKey,
           'privateKey': testIdentity.privateKey,
-          'nickname': decoded.nickname,
+          'nickname': testIdentity.nickname,
         });
         final reEncodedHandler =
             ProtocolHandler(identity: reEncodedIdentity, sodium: sodium);

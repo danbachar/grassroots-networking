@@ -3283,7 +3283,7 @@ class GrassrootsNetwork {
 
           if (iAmInitiator) {
             debugPrint(
-              '[auto-udp] Friend ${data.nickname} has UDP address '
+              '[auto-udp] Friend ${pubkeyHex.substring(0, 8)} has UDP address '
               '$announcedCandidates, connecting proactively (I am initiator)...',
             );
             _connectToFriendViaUdp(
@@ -3292,7 +3292,7 @@ class GrassrootsNetwork {
             );
           } else {
             debugPrint(
-              '[auto-udp] Friend ${data.nickname} has UDP address '
+              '[auto-udp] Friend ${pubkeyHex.substring(0, 8)} has UDP address '
               '$announcedCandidates, waiting for them to connect (they are initiator)',
             );
           }

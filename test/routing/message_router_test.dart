@@ -17,11 +17,9 @@ import '../helpers/sodium_test_bootstrap.dart';
 /// [pubkey(32) + version(2) + nickLen(1) + nick + candidateCount(2) + candidates]
 Uint8List buildAnnouncePayload({
   required Uint8List pubkey,
-  String nickname = 'OtherPeer',
   String? address,
   Set<String> addressCandidates = const {},
 }) {
-  final nicknameBytes = Uint8List.fromList(nickname.codeUnits);
   final candidates = <String>{
     if (address != null && address.isNotEmpty) address,
     ...addressCandidates,
@@ -33,9 +31,6 @@ Uint8List buildAnnouncePayload({
   final versionBytes = ByteData(2);
   versionBytes.setUint16(0, 1, Endian.big);
   buffer.add(versionBytes.buffer.asUint8List());
-
-  buffer.addByte(nicknameBytes.length);
-  buffer.add(nicknameBytes);
 
   final candidateCountBytes = ByteData(2);
   candidateCountBytes.setUint16(0, candidates.length, Endian.big);
@@ -200,7 +195,7 @@ void main() {
         };
 
         final payload =
-            buildAnnouncePayload(pubkey: otherPubkey, nickname: 'Alice');
+            buildAnnouncePayload(pubkey: otherPubkey);
         final p = await signedPacket(
           type: PacketType.announce,
           payload: payload,
@@ -220,7 +215,7 @@ void main() {
       test('decodes ANNOUNCE and dispatches PeerAnnounceReceivedAction',
           () async {
         final payload =
-            buildAnnouncePayload(pubkey: otherPubkey, nickname: 'Alice');
+            buildAnnouncePayload(pubkey: otherPubkey);
         final p = await signedPacket(
           type: PacketType.announce,
           payload: payload,
@@ -234,8 +229,7 @@ void main() {
 
         final peer = store.state.peers.getPeerByPubkey(otherPubkey);
         expect(peer, isNotNull);
-        expect(peer!.nickname, equals('Alice'));
-        expect(peer.rssi, equals(-55));
+        expect(peer!.rssi, equals(-55));
         expect(peer.transport, equals(PeerTransport.bleDirect));
       });
 
@@ -394,7 +388,7 @@ void main() {
         };
 
         final payload =
-            buildAnnouncePayload(pubkey: otherPubkey, nickname: 'Bob');
+            buildAnnouncePayload(pubkey: otherPubkey);
         final p = await signedPacket(
           type: PacketType.announce,
           payload: payload,
@@ -407,14 +401,13 @@ void main() {
         );
 
         expect(receivedData, isNotNull);
-        expect(receivedData!.nickname, equals('Bob'));
         expect(receivedTransport, equals(PeerTransport.bleDirect));
       });
 
       test('always processes ANNOUNCE even if seen before (no dedup)',
           () async {
         final payload =
-            buildAnnouncePayload(pubkey: otherPubkey, nickname: 'Charlie');
+            buildAnnouncePayload(pubkey: otherPubkey);
         final p = await signedPacket(
           type: PacketType.announce,
           payload: payload,
@@ -495,7 +488,6 @@ void main() {
       test('does not overwrite known RSSI when payload RSSI is null', () async {
         store.dispatch(PeerAnnounceReceivedAction(
           publicKey: otherPubkey,
-          nickname: 'Alice',
           protocolVersion: 1,
           rssi: -44,
           bleCentralDeviceId: 'central:peer-1',
@@ -743,7 +735,6 @@ void main() {
       test('decodes ANNOUNCE and dispatches to Redux', () async {
         final payload = buildAnnouncePayload(
           pubkey: otherPubkey,
-          nickname: 'UdpPeer',
           address: '[2001:db8::1]:4001',
         );
         final p = await signedPacket(
@@ -759,8 +750,7 @@ void main() {
 
         final peer = store.state.peers.getPeerByPubkey(otherPubkey);
         expect(peer, isNotNull);
-        expect(peer!.nickname, equals('UdpPeer'));
-        expect(peer.transport, equals(PeerTransport.udp));
+        expect(peer!.transport, equals(PeerTransport.udp));
         expect(
           peer.udpAddress,
           equals('[2001:db8::1]:4001'),
@@ -775,7 +765,6 @@ void main() {
 
         final payload = buildAnnouncePayload(
           pubkey: otherPubkey,
-          nickname: 'UdpPeer',
           address: '[2001:db8::1]:4001',
         );
         final p = await signedPacket(
@@ -804,7 +793,6 @@ void main() {
         // be stored as udpAddress.
         final payload = buildAnnouncePayload(
           pubkey: otherPubkey,
-          nickname: 'NoPeer',
         );
         final p = await signedPacket(
           type: PacketType.announce,

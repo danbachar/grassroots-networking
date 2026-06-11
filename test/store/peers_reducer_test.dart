@@ -361,7 +361,6 @@ void main() {
       const state = PeersState.initial;
       final action = PeerAnnounceReceivedAction(
         publicKey: pubkey,
-        nickname: 'Alice',
         protocolVersion: 2,
         rssi: -55,
         transport: PeerTransport.bleDirect,
@@ -374,7 +373,9 @@ void main() {
       expect(result.peers.length, 1);
       final peer = result.peers[hex]!;
       expect(peer.publicKey, pubkey);
-      expect(peer.nickname, 'Alice');
+      // ANNOUNCE no longer carries a nickname; a freshly announced peer has
+      // an empty display name and falls back to the pubkey fingerprint.
+      expect(peer.nickname, '');
       expect(peer.protocolVersion, 2);
       expect(peer.rssi, -55);
       expect(peer.transport, PeerTransport.bleDirect);
@@ -391,7 +392,6 @@ void main() {
       const state = PeersState.initial;
       final action = PeerAnnounceReceivedAction(
         publicKey: pubkey,
-        nickname: 'Alice',
         protocolVersion: 1,
         rssi: -60,
         transport: PeerTransport.bleDirect,
@@ -418,7 +418,6 @@ void main() {
           PeersState.initial,
           PeerAnnounceReceivedAction(
             publicKey: pubkey,
-            nickname: 'Alice',
             protocolVersion: 1,
             rssi: -55,
             transport: PeerTransport.bleDirect,
@@ -434,7 +433,6 @@ void main() {
           state,
           PeerAnnounceReceivedAction(
             publicKey: pubkey,
-            nickname: 'Alice',
             protocolVersion: 1,
             rssi: -50,
             transport: PeerTransport.bleDirect,
@@ -468,7 +466,6 @@ void main() {
       );
       final action = PeerAnnounceReceivedAction(
         publicKey: pubkey,
-        nickname: 'NewNick',
         protocolVersion: 3,
         rssi: -40,
         transport: PeerTransport.udp,
@@ -478,7 +475,9 @@ void main() {
       final result = peersReducer(initial, action);
 
       final peer = result.peers[hex]!;
-      expect(peer.nickname, 'NewNick');
+      // ANNOUNCE no longer carries a nickname, so the existing display name
+      // is preserved rather than overwritten.
+      expect(peer.nickname, 'OldNick');
       expect(peer.protocolVersion, 3);
       expect(peer.rssi, -40);
       expect(peer.transport, PeerTransport.udp);
@@ -513,7 +512,6 @@ void main() {
         initial,
         PeerAnnounceReceivedAction(
           publicKey: pubkey,
-          nickname: 'NewNick',
           protocolVersion: 3,
           rssi: -40,
           transport: PeerTransport.udp,
@@ -522,7 +520,9 @@ void main() {
       );
 
       final peer = result.peers[hex]!;
-      expect(peer.nickname, 'NewNick');
+      // ANNOUNCE no longer carries a nickname, so the existing display name
+      // is preserved rather than overwritten.
+      expect(peer.nickname, 'OldNick');
       expect(peer.protocolVersion, 3);
       expect(peer.rssi, -40);
       expect(peer.connectionState, PeerConnectionState.connected);
@@ -535,7 +535,6 @@ void main() {
       final pubkey = _testPubkey(2);
       final action = PeerAnnounceReceivedAction(
         publicKey: pubkey,
-        nickname: 'Bob',
         protocolVersion: 1,
         rssi: -60,
       );
@@ -562,7 +561,6 @@ void main() {
       );
       final action = PeerAnnounceReceivedAction(
         publicKey: pubkey,
-        nickname: 'Alice',
         protocolVersion: 1,
         rssi: -40,
         transport: PeerTransport.udp,
@@ -582,7 +580,6 @@ void main() {
       final pubkey = _testPubkey(3);
       final action = PeerAnnounceReceivedAction(
         publicKey: pubkey,
-        nickname: 'Carol',
         protocolVersion: 1,
         rssi: -42,
         transport: PeerTransport.udp,
@@ -613,7 +610,6 @@ void main() {
       );
       final action = PeerAnnounceReceivedAction(
         publicKey: pubkey,
-        nickname: 'Dana',
         protocolVersion: 1,
         rssi: -55,
         transport: PeerTransport.bleDirect,

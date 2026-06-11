@@ -170,7 +170,7 @@ class PeerState {
 
   const PeerState({
     required this.publicKey,
-    required this.nickname,
+    this.nickname = '',
     this.connectionState = PeerConnectionState.discovered,
     this.transport = PeerTransport.bleDirect,
     this.rssi,

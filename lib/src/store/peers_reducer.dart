@@ -156,7 +156,6 @@ PeersState peersReducer(PeersState state, dynamic action) {
       // New peer — no prior reachability evidence.
       final newPeer = PeerState(
         publicKey: action.publicKey,
-        nickname: action.nickname,
         connectionState: PeerConnectionState.connected,
         transport: action.transport,
         rssi: action.rssi,
@@ -202,7 +201,6 @@ PeersState peersReducer(PeersState state, dynamic action) {
       // so a UDP ANNOUNCE (action.rssi == null) keeps any existing BLE-derived
       // RSSI. A BLE ANNOUNCE carries the per-packet payload.rssi and overwrites.
       final updated = existing.copyWith(
-        nickname: action.nickname,
         connectionState: PeerConnectionState.connected,
         transport: action.transport,
         rssi: action.rssi,

@@ -338,7 +338,6 @@ class MessageRouter {
 
     store.dispatch(PeerAnnounceReceivedAction(
       publicKey: pubkey,
-      nickname: data.nickname,
       protocolVersion: data.protocolVersion,
       rssi: effectiveRssi,
       transport: transport,
@@ -358,7 +357,8 @@ class MessageRouter {
     }
 
     debugPrint(
-        'Peer ${isNew ? "connected" : "updated"}: ${data.nickname} via ${transport.name}'
+        'Peer ${isNew ? "connected" : "updated"}: '
+        '${_pubkeyToHex(pubkey).substring(0, 8)} via ${transport.name}'
         '${data.udpAddress != null ? " addr=${data.udpAddress}" : ""}');
 
     // debugPrint('Peer announced!');

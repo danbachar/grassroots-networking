@@ -24,14 +24,13 @@ class ProtocolHandler {
   /// Create ANNOUNCE payload
   ///
   /// Format:
-  /// [pubkey(32) + version(2) + nickLen(1) + nick
+  /// [pubkey(32) + version(2)
   ///  + candidateCount(2) + repeated(candidateLen(2) + candidate)]
   Uint8List createAnnouncePayload({
     String? address,
     String? linkLocalAddress,
     Iterable<String> addressCandidates = const [],
   }) {
-    final nicknameBytes = Uint8List.fromList(identity.nickname.codeUnits);
     final candidates = <String>{
       if (address != null && address.isNotEmpty) address,
       if (linkLocalAddress != null && linkLocalAddress.isNotEmpty)
@@ -47,10 +46,6 @@ class ProtocolHandler {
     final versionBytes = ByteData(2);
     versionBytes.setUint16(0, protocolVersion, Endian.big);
     buffer.add(versionBytes.buffer.asUint8List());
-
-    // Nickname length (1 byte) + nickname
-    buffer.addByte(nicknameBytes.length);
-    buffer.add(nicknameBytes);
 
     // Candidate address set.
     final candidateCountBytes = ByteData(2);
@@ -108,7 +103,7 @@ class ProtocolHandler {
   /// Decode ANNOUNCE payload
   ///
   /// Format:
-  /// [pubkey(32) + version(2) + nickLen(1) + nick
+  /// [pubkey(32) + version(2)
   ///  + candidateCount(2) + repeated(candidateLen(2) + candidate)]
   AnnounceData decodeAnnounce(Uint8List data) {
     var offset = 0;
@@ -121,13 +116,6 @@ class ProtocolHandler {
     final version = ByteData.view(data.buffer, data.offsetInBytes + offset, 2)
         .getUint16(0, Endian.big);
     offset += 2;
-
-    // Nickname length (1 byte) + nickname
-    final nicknameLength = data[offset];
-    offset += 1;
-    final nickname =
-        String.fromCharCodes(data.sublist(offset, offset + nicknameLength));
-    offset += nicknameLength;
 
     if (offset + 2 > data.length) {
       throw const FormatException('ANNOUNCE payload missing candidates');
@@ -164,7 +152,6 @@ class ProtocolHandler {
 
     return AnnounceData(
       publicKey: Uint8List.fromList(pubkey),
-      nickname: nickname,
       protocolVersion: version,
       udpAddress: address,
       linkLocalAddress: linkLocalAddress,
@@ -269,7 +256,6 @@ class ProtocolHandler {
 /// Decoded ANNOUNCE data
 class AnnounceData {
   final Uint8List publicKey;
-  final String nickname;
   final int protocolVersion;
   final String? udpAddress;
   final String? linkLocalAddress;
@@ -277,7 +263,6 @@ class AnnounceData {
 
   const AnnounceData({
     required this.publicKey,
-    required this.nickname,
     required this.protocolVersion,
     this.udpAddress,
     this.linkLocalAddress,
@@ -285,7 +270,7 @@ class AnnounceData {
   });
 
   @override
-  String toString() => 'AnnounceData($nickname, v$protocolVersion'
+  String toString() => 'AnnounceData(v$protocolVersion'
       '${udpAddress != null ? ", addr: $udpAddress" : ""}'
       '${linkLocalAddress != null ? ", ll: $linkLocalAddress" : ""}'
       '${addressCandidates.isNotEmpty ? ", candidates: $addressCandidates" : ""})';
