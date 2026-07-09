@@ -7,6 +7,7 @@ import 'package:sodium_libs/sodium_libs_sumo.dart';
 import 'package:uuid/uuid.dart';
 import 'ble/permission_handler.dart';
 import 'platform/transport_foreground_service.dart';
+import 'signaling/peer_link.dart';
 import 'signaling/signaling_codec.dart';
 import 'signaling/signaling_service.dart';
 import 'transport/address_utils.dart';
@@ -91,6 +92,22 @@ class _RendezvousConfig {
     required this.address,
     required this.pubkey,
     required this.pubkeyHex,
+  });
+}
+
+/// Local record of an invite minted by [GrassrootsNetwork.generatePeerLink],
+/// pending redemption ("records the invite locally as unused" — spec
+/// §IP Cold-Call). Used to validate the rendezvous server's redeemed
+/// notification and enforce local single-use.
+class _OutstandingInvite {
+  /// The rendezvous server the invite was registered with — the only sender
+  /// whose redeemed notification is accepted for it.
+  final String rvPubkeyHex;
+  final int expiresAtMs;
+
+  const _OutstandingInvite({
+    required this.rvPubkeyHex,
+    required this.expiresAtMs,
   });
 }
 
@@ -311,8 +328,8 @@ Set<String> computeStaleBlePeerPubkeys({
 ///   // Handle incoming GSG block
 /// };
 ///
-/// grassroots.onPeerConnected = (peer) {
-///   // Send ANNOUNCE, start cordial dissemination
+/// grassroots.onPeerConnected = (publicKey, transport) {
+///   // peer reachable over `transport` (BLE or UDP) — start cordial dissemination
 /// };
 ///
 /// await grassroots.initialize();
@@ -347,12 +364,13 @@ class GrassrootsNetwork {
   /// Last accepted friend set broadcast through FRIEND_LIST.
   Set<String> _lastFriendPubkeyHexes = const {};
 
-  /// Per-peer `isReachable` snapshot from the previous store tick. Used by
-  /// the reachability subscriber to detect false→true (fire onPeerConnected)
-  /// and true→false (fire onPeerDisconnected) transitions across the
-  /// consolidated view of all transports. A missing entry is treated as
-  /// `false` so a peer that materializes already-reachable fires connect.
-  final Map<String, bool> _lastKnownReachability = {};
+  /// Per-peer set of reachable transports from the previous store tick. Used
+  /// by the reachability subscriber to detect, per medium, transports that
+  /// came up (fire onPeerConnected) or went down (fire onPeerDisconnected). A
+  /// missing entry is treated as the empty set, so a peer that materializes
+  /// already-reachable fires connect for each live medium. Only non-empty sets
+  /// are retained — an unreachable peer holds no entry.
+  final Map<String, Set<MessageTransport>> _lastKnownTransports = {};
 
   /// Pubkeys (hex) already surfaced via [onPeerDiscovered] this session.
   /// Discovery is the identity-learned event — the first accepted ANNOUNCE
@@ -535,17 +553,24 @@ class GrassrootsNetwork {
   /// Receives the peer's public key and nickname per the spec.
   void Function(Uint8List publicKey, String nickname)? onPeerDiscovered;
 
-  /// Called when a peer becomes reachable (transitions from zero live
-  /// transports to one or more). Fires again if the peer disconnects and
-  /// later reconnects.
-  void Function(PeerState peer)? onPeerConnected;
+  /// Called when a peer becomes reachable over a given transport. Fires once
+  /// per medium: a peer reachable over both BLE and IP fires twice (one BLE,
+  /// one IP), and a medium that drops and later recovers fires again. Receives
+  /// the peer's public key and the [MessageTransport] it connected over. Spec
+  /// `docs/GLP_Networking_API/sections/api.tex` §Connection and Reachability.
+  void Function(Uint8List publicKey, MessageTransport transport)?
+      onPeerConnected;
 
   /// Called when an existing peer sends an ANNOUNCE update.
   void Function(PeerState peer)? onPeerUpdated;
 
-  /// Called when a peer is no longer reachable (transitions to zero live
-  /// transports). Does not fire when losing one of multiple live transports.
-  void Function(PeerState peer)? onPeerDisconnected;
+  /// Called when a peer stops being reachable over a given transport. Fires
+  /// per medium: losing one of two live transports fires here for the medium
+  /// that dropped while the peer stays reachable over the other. Receives the
+  /// peer's public key and the [MessageTransport] that went down. Spec
+  /// `docs/GLP_Networking_API/sections/api.tex` §Connection and Reachability.
+  void Function(Uint8List publicKey, MessageTransport transport)?
+      onPeerDisconnected;
 
   /// Called when UDP transport becomes available
   void Function()? onUdpInitialized;
@@ -566,6 +591,20 @@ class GrassrootsNetwork {
   void Function(String? oldAddress, String? newAddress)?
       onConnectivityStatusChanged;
 
+  /// Fired when a peer link minted by [generatePeerLink] is redeemed: the
+  /// rendezvous server verified the holder's claim, atomically marked the
+  /// invite used, and forwarded the redeemer's identity (spec §IP Cold-Call).
+  /// Receives the redeemer's public key. Everything beyond this point —
+  /// whether to accept, the signaling that follows, the resulting NAT
+  /// traversal — is GLP-level and not the transport's concern.
+  void Function(Uint8List redeemerPubkey)? onPeerLinkRedeemed;
+
+  /// Outstanding invites minted by [generatePeerLink], keyed by lowercase
+  /// InviteId hex. Held in-memory only: an invite is a short-lived (1 hour)
+  /// secret-adjacent artifact — deliberately NOT in the Redux store, which is
+  /// persisted to disk. Lost invites simply expire server-side.
+  final Map<String, _OutstandingInvite> _outstandingInvites = {};
+
   // ===== Convenience accessors for Redux state =====
 
   PeersState get _peersState => store.state.peers;
@@ -580,7 +619,6 @@ class GrassrootsNetwork {
     _fragmentHandler = FragmentHandler();
     _noiseSessions = NoiseSessionManager(identity: identity, sodium: sodium);
     _messageRouter = MessageRouter(
-      identity: identity,
       store: store,
       protocolHandler: _protocolHandler,
       fragmentHandler: _fragmentHandler,
@@ -633,6 +671,11 @@ class GrassrootsNetwork {
   bool get _udpAvailable =>
       _udpService != null && store.state.transports.udpState.isUsable;
 
+  /// The agent's own public key — its globally unique identity. Spec
+  /// `docs/GLP_Networking_API/sections/api.tex` §Identity: `getIdentity() ->
+  /// PubKey`. The private key is held internally and never returned here.
+  Uint8List getIdentity() => identity.publicKey;
+
   /// Currently reachable peers — spec `docs/GLP_Networking_API/sections/api.tex`
   /// §getPeers: "Discover currently reachable peers." Returns only peers
   /// where `isReachable` is true (i.e. at least one transport is live).
@@ -644,9 +687,186 @@ class GrassrootsNetwork {
   /// Check if a peer is reachable via any transport
   bool isPeerReachable(Uint8List pubkey) => _peersState.isPeerReachable(pubkey);
 
+  /// The transports by which [pubkey] is currently reachable, or an empty list
+  /// if it is unreachable. Spec `docs/GLP_Networking_API/sections/api.tex`
+  /// §Connection and Reachability — lets GLP make proximity-aware decisions
+  /// (e.g. nearby friends = friends ∩ peers reachable over BLE). Returns a
+  /// fresh list ordered BLE-before-IP.
+  List<MessageTransport> peerTransports(Uint8List pubkey) =>
+      _peersState.getPeerByPubkey(pubkey)?.reachableTransports.toList() ??
+      const <MessageTransport>[];
+
   /// The agent's current public `ip:port`, or null if not yet known.
   /// Address changes are surfaced via [onConnectivityStatusChanged].
   String? getPublicAddress() => store.state.transports.publicAddress;
+
+  /// The last known public `ip:port` for [pubkey], or null if unknown.
+  ///
+  /// This is the observed/stored peer address (dial-book entry), not our own
+  /// address. For the local agent's address use [getPublicAddress].
+  String? peerAddress(Uint8List pubkey) =>
+      _peersState.getPeerByPubkey(pubkey)?.udpAddress;
+
+  /// Feed the networking layer a peer's current public `ip:port`, learned at
+  /// the GLP level (from a rendezvous agent or a BLE-adjacent friend). The
+  /// layer records it in its dial book for [send] and reconnection, creating a
+  /// dial-book entry even for a peer it has not yet met. Spec
+  /// `docs/GLP_Networking_API/sections/ip.tex` §Connectivity and Address.
+  ///
+  /// [address] must be a non-empty `ip:port` (IPv4, or bracketed IPv6 as
+  /// `[ip]:port`); it is canonicalized before storage. An unparseable address
+  /// is rejected with an [ArgumentError]. This call only ever *supplies* an
+  /// address — it never clears one; stored addresses are cleared only when the
+  /// peer itself reports it no longer has one.
+  void putPeerAddress(Uint8List pubkey, String address) {
+    final parsed = parseAddressString(address);
+    if (parsed == null) {
+      throw ArgumentError.value(address, 'address', 'not a valid ip:port');
+    }
+    store.dispatch(AssociateUdpAddressAction(
+      publicKey: pubkey,
+      address: parsed.toAddressString(),
+    ));
+  }
+
+  /// Produce a signed, one-time, rendezvous-mediated invite link and register
+  /// the invite with a chosen rendezvous server. Spec
+  /// `GLP_Networking_API` §IP Cold-Call: `generatePeerLink() -> URI`.
+  ///
+  /// Picks the first configured rendezvous server, mints a fresh 256-bit
+  /// nonce, signs the invite record, derives the opaque InviteId/InviteKey,
+  /// records the invite locally as unused, and registers it (id + proof key +
+  /// expiry) with the server over the existing authenticated connection. The
+  /// raw nonce travels only inside the returned link.
+  ///
+  /// Throws [StateError] when no rendezvous server is configured or the
+  /// registration cannot be delivered (an unregistered link is unredeemable,
+  /// so it is never returned).
+  Future<String> generatePeerLink() async {
+    // Drop links that expired without ever being redeemed so the map can't
+    // grow unbounded over a long-lived session.
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    _outstandingInvites.removeWhere((_, inv) => inv.expiresAtMs < nowMs);
+
+    final servers = store.state.settings.configuredRendezvousServers;
+    if (servers.isEmpty) {
+      throw StateError(
+        'generatePeerLink requires a configured rendezvous server',
+      );
+    }
+    final rv = servers.first;
+    final rvPubkey = _hexToBytes(rv.normalizedPubkeyHex);
+
+    final nonce = sodium.randombytes.buf(32);
+    final expiresAtMs =
+        DateTime.now().add(inviteLifetime).millisecondsSinceEpoch;
+    final invite = PeerLinkInvite.create(
+      identityPubkey: identity.publicKey,
+      rvPubkey: rvPubkey,
+      rvAddress: rv.address,
+      nonce: nonce,
+      expiresAtMs: expiresAtMs,
+      sign: _protocolHandler.signBytes,
+    );
+
+    final inviteId = deriveInviteId(nonce);
+    final inviteKey = await deriveInviteKey(
+      nonce: nonce,
+      inviterPubkey: identity.publicKey,
+      rvPubkey: rvPubkey,
+      rvAddress: rv.address,
+      expiresAtMs: expiresAtMs,
+    );
+
+    final registration = const SignalingCodec().encode(RegisterInviteMessage(
+      inviteId: inviteId,
+      inviteKey: inviteKey,
+      expiresAtMs: expiresAtMs,
+    ));
+    final delivered =
+        await _signalingService.sendSignaling?.call(rvPubkey, registration) ??
+            false;
+    if (!delivered) {
+      throw StateError(
+        'Could not register invite with rendezvous server ${rv.address}',
+      );
+    }
+
+    final inviteIdHex = _pubkeyToHex(inviteId);
+    _outstandingInvites[inviteIdHex] = _OutstandingInvite(
+      rvPubkeyHex: rv.normalizedPubkeyHex,
+      expiresAtMs: expiresAtMs,
+    );
+    debugPrint('[peer-link] registered invite '
+        '${inviteIdHex.substring(0, 8)}... with RV ${rv.address}');
+    return invite.toUri();
+  }
+
+  /// Redeem a peer link received out-of-band. Spec `GLP_Networking_API`
+  /// §IP Cold-Call: `consumePeerLink(uri) -> PubKey`.
+  ///
+  /// Verifies the inviter's signature and the expiration, registers the
+  /// inviter's identity locally, re-derives InviteId/InviteKey from the
+  /// link's nonce, and submits the redemption claim (InviteId, our identity
+  /// as the authenticated sender, MAC under InviteKey) to the rendezvous
+  /// server named in the link. Returns the inviter's public key.
+  ///
+  /// Throws [FormatException] for a malformed or signature-invalid link and
+  /// [StateError] for an expired/self-issued link or an unreachable
+  /// rendezvous server.
+  Future<Uint8List> consumePeerLink(String uri) async {
+    final invite = PeerLinkInvite.fromUri(uri);
+    if (!invite.verifySignature(sodium)) {
+      throw const FormatException('Invite signature verification failed');
+    }
+    if (invite.isExpired) {
+      throw StateError('Invite link has expired');
+    }
+    if (listEquals(invite.inviterPubkey, identity.publicKey)) {
+      throw StateError('Cannot redeem an invite issued by this identity');
+    }
+
+    // Register the inviter's identity locally (spec) — reachability and
+    // addresses follow later through the GLP-driven connection flow.
+    store.dispatch(
+      PeerIdentityRegisteredAction(publicKey: invite.inviterPubkey),
+    );
+
+    final inviteId = deriveInviteId(invite.nonce);
+    final inviteKey = await deriveInviteKey(
+      nonce: invite.nonce,
+      inviterPubkey: invite.inviterPubkey,
+      rvPubkey: invite.rvPubkey,
+      rvAddress: invite.rvAddress,
+      expiresAtMs: invite.expiresAtMs,
+    );
+    final redeemerNonce = sodium.randombytes.buf(32);
+    final mac = await computeRedemptionMac(
+      inviteKey: inviteKey,
+      inviterPubkey: invite.inviterPubkey,
+      redeemerPubkey: identity.publicKey,
+      inviteId: inviteId,
+      redeemerNonce: redeemerNonce,
+    );
+
+    final claim = const SignalingCodec().encode(RedeemInviteMessage(
+      inviteId: inviteId,
+      redeemerNonce: redeemerNonce,
+      mac: mac,
+    ));
+    final delivered = await _signalingService.sendSignalingToAddress
+            ?.call(invite.rvPubkey, invite.rvAddress, claim) ??
+        false;
+    if (!delivered) {
+      throw StateError(
+        'Could not submit redemption to rendezvous server ${invite.rvAddress}',
+      );
+    }
+    debugPrint('[peer-link] redeemed invite from '
+        '${_pubkeyToHex(invite.inviterPubkey).substring(0, 8)}... '
+        'via RV ${invite.rvAddress}');
+    return invite.inviterPubkey;
+  }
 
   /// Get peer by public key - from Redux store
   PeerState? getPeer(Uint8List pubkey) => _peersState.getPeerByPubkey(pubkey);
@@ -1840,7 +2060,10 @@ class GrassrootsNetwork {
     await _bleService?.applyRoleModeChange();
   }
 
-  Future<void> setColdCallTrustLevel(ColdCallTrustLevel level) async {
+  /// Set the BLE cold-call trust level (Open/Closed). Spec
+  /// `docs/GLP_Networking_API/sections/ble.tex` §Cold-Call Trust Levels:
+  /// `setTrustLevel(level)`. Until set, the level is Closed.
+  Future<void> setTrustLevel(ColdCallTrustLevel level) async {
     if (store.state.settings.coldCallTrustLevel == level) return;
     store.dispatch(SetColdCallTrustLevelAction(level));
   }
@@ -1872,9 +2095,8 @@ class GrassrootsNetwork {
       return null;
     }
 
-    // Use provided message ID or generate one. Full UUID required —
-    // packet.packetId is wire-encoded as 16 bytes, so a short prefix would
-    // be corrupted on serialization.
+    // Use provided message ID or generate one. Full UUID required — the
+    // MESSAGE payload carries it as a fixed 36-character prefix.
     messageId ??= _uuid.v4();
 
     // Dispatch sending action (clock icon)
@@ -1914,16 +2136,13 @@ class GrassrootsNetwork {
       return false;
     }
 
-    // Create the message packet. It is signed after optional session
-    // encryption because the signature covers the final wire payload.
-    // packetId == messageId so the recipient's ACK (which echoes the
-    // packetId back) matches the entry we just stored under `messageId`
-    // in `MessageSendingAction`. Otherwise `MessageDeliveredAction` would
-    // look up an unrelated UUID and never flip ✓ → ✓✓.
+    // Create the message packet. The payload's messageId prefix is the id
+    // the recipient's ACK echoes back, matching the entry we just stored
+    // under `messageId` in `MessageSendingAction` so
+    // `MessageDeliveredAction` can flip ✓ → ✓✓.
     final packet = _protocolHandler.createMessagePacket(
       payload: payload,
-      recipientPubkey: recipientPubkey,
-      packetId: messageId,
+      messageId: messageId,
     );
 
     // --- Try BLE first (preferred for nearby peers) ---
@@ -1943,7 +2162,7 @@ class GrassrootsNetwork {
           messageId: messageId,
         );
       } else {
-        final bytes = await _signedPacketBytesForTransport(
+        final bytes = await _packetBytesForTransport(
           packet: packet,
           transport: PeerTransport.bleDirect,
           recipientPubkey: recipientPubkey,
@@ -1977,7 +2196,7 @@ class GrassrootsNetwork {
 
       // Try existing UDX connection first
       if (_udpService!.getPeerIdForPubkey(recipientPubkey) != null) {
-        final bytes = await _signedPacketBytesForTransport(
+        final bytes = await _packetBytesForTransport(
           packet: packet,
           transport: PeerTransport.udp,
           recipientPubkey: recipientPubkey,
@@ -2353,14 +2572,13 @@ class GrassrootsNetwork {
     // session encryption, if available.
     final packet = _protocolHandler.createReadReceiptPacket(
       messageId: messageId,
-      recipientPubkey: senderPubkey,
     );
 
     // Try BLE first
     if (_isBleEnabledInSettings && _bleAvailable && _bleService != null) {
       final bleDeviceId = _connectedBleDeviceIdForPeer(peer);
       if (peer != null && bleDeviceId != null) {
-        final bytes = await _signedPacketBytesForTransport(
+        final bytes = await _packetBytesForTransport(
           packet: packet,
           transport: PeerTransport.bleDirect,
           recipientPubkey: senderPubkey,
@@ -2411,9 +2629,9 @@ class GrassrootsNetwork {
           } else {
             final packet = _protocolHandler.createMessagePacket(
               payload: payload,
-              recipientPubkey: pubkey,
+              messageId: _uuid.v4(),
             );
-            final bytes = await _signedPacketBytesForTransport(
+            final bytes = await _packetBytesForTransport(
               packet: packet,
               transport: PeerTransport.bleDirect,
               recipientPubkey: pubkey,
@@ -2437,9 +2655,9 @@ class GrassrootsNetwork {
           }
           final packet = _protocolHandler.createMessagePacket(
             payload: payload,
-            recipientPubkey: peer.publicKey,
+            messageId: _uuid.v4(),
           );
-          final bytes = await _signedPacketBytesForTransport(
+          final bytes = await _packetBytesForTransport(
             packet: packet,
             transport: PeerTransport.udp,
             recipientPubkey: peer.publicKey,
@@ -2742,13 +2960,8 @@ class GrassrootsNetwork {
   }) async {
     final packet = GrassrootsPacket(
       type: PacketType.noiseHandshake,
-      ttl: 0,
-      senderPubkey: identity.publicKey,
-      recipientPubkey: recipientPubkey,
       payload: payload,
-      signature: Uint8List(64),
     );
-    await _protocolHandler.signPacket(packet);
     final bytes = packet.serialize();
 
     if (transport == PeerTransport.bleDirect) {
@@ -2769,7 +2982,7 @@ class GrassrootsNetwork {
     return false;
   }
 
-  Future<Uint8List?> _signedPacketBytesForTransport({
+  Future<Uint8List?> _packetBytesForTransport({
     required GrassrootsPacket packet,
     required PeerTransport transport,
     required Uint8List recipientPubkey,
@@ -2789,7 +3002,6 @@ class GrassrootsNetwork {
         remotePubkey: recipientPubkey,
       );
     }
-    await _protocolHandler.signPacket(outgoing);
     return outgoing.serialize();
   }
 
@@ -2849,16 +3061,10 @@ class GrassrootsNetwork {
     return pair;
   }
 
-  GrassrootsPacket _createSignalingPacket(
-    Uint8List recipientPubkey,
-    Uint8List signalingPayload,
-  ) {
+  GrassrootsPacket _createSignalingPacket(Uint8List signalingPayload) {
     return GrassrootsPacket(
       type: PacketType.signaling,
-      senderPubkey: identity.publicKey,
-      recipientPubkey: recipientPubkey,
       payload: signalingPayload,
-      signature: Uint8List(64),
     );
   }
 
@@ -2878,8 +3084,8 @@ class GrassrootsNetwork {
       return false;
     }
 
-    final packet = _createSignalingPacket(recipientPubkey, signalingPayload);
-    final bytes = await _signedPacketBytesForTransport(
+    final packet = _createSignalingPacket(signalingPayload);
+    final bytes = await _packetBytesForTransport(
       packet: packet,
       transport: PeerTransport.bleDirect,
       recipientPubkey: recipientPubkey,
@@ -3073,7 +3279,7 @@ class GrassrootsNetwork {
             );
     if (!connected) return false;
 
-    final bytes = await _signedPacketBytesForTransport(
+    final bytes = await _packetBytesForTransport(
       packet: packet,
       transport: PeerTransport.udp,
       recipientPubkey: recipientPubkey,
@@ -3786,18 +3992,27 @@ class GrassrootsNetwork {
         final result = await _noiseSessions.handleHandshakePacket(
           packet,
           transport: transport,
+          peerId: peerId,
         );
         final response = result.responsePayload;
         if (response != null) {
           await _sendNoiseHandshakePacket(
             transport: transport,
-            recipientPubkey: packet.senderPubkey,
+            recipientPubkey: result.remotePubkey,
             peerId: peerId,
             payload: response,
           );
         }
         if (result.sessionEstablished) {
-          _onNoiseSessionEstablished(transport, packet.senderPubkey);
+          // The handshake authenticated the connection's identity — map any
+          // still-anonymous inbound UDP connection to the peer's pubkey.
+          if (transport == PeerTransport.udp && peerId != null) {
+            _udpService?.mapIncomingConnectionToPubkey(
+              peerId,
+              _pubkeyToHex(result.remotePubkey),
+            );
+          }
+          _onNoiseSessionEstablished(transport, result.remotePubkey);
         }
       } catch (e) {
         debugPrint('[noise] Dropping handshake packet: $e');
@@ -3807,9 +4022,25 @@ class GrassrootsNetwork {
     _messageRouter.decryptSessionPacket =
         (packet, transport, {String? peerId}) async {
       try {
+        // Resolve the connection's identity when the transport already knows
+        // it (BLE deviceId→pubkey from ANNOUNCE identification; UDP peerId is
+        // the pubkey hex once the connection is mapped). The session manager
+        // falls back to its own connection→identity map from the handshake.
+        Uint8List? remotePubkey;
+        if (peerId != null) {
+          if (transport == PeerTransport.bleDirect) {
+            remotePubkey = _bleService?.getPubkeyForPeerId(peerId);
+          } else if (transport == PeerTransport.udp &&
+              !peerId.contains(':') &&
+              peerId.length == 64) {
+            remotePubkey = _hexToBytes(peerId);
+          }
+        }
         return await _noiseSessions.decryptPacket(
           packet,
           transport: transport,
+          peerId: peerId,
+          remotePubkey: remotePubkey,
         );
       } catch (e) {
         debugPrint('[noise] Failed to decrypt session packet: $e');
@@ -3975,9 +4206,8 @@ class GrassrootsNetwork {
 
       final ackPacket = _protocolHandler.createAckPacket(
         messageId: messageId,
-        recipientPubkey: recipientPubkey,
       );
-      final bytes = await _signedPacketBytesForTransport(
+      final bytes = await _packetBytesForTransport(
         packet: ackPacket,
         transport: transport,
         recipientPubkey: recipientPubkey,
@@ -4009,10 +4239,7 @@ class GrassrootsNetwork {
     // SignalingService sends signaling payloads through us (wrapped in GrassrootsPacket)
     _signalingService.sendSignaling =
         (recipientPubkey, signalingPayload) async {
-      final packet = _createSignalingPacket(
-        recipientPubkey,
-        signalingPayload,
-      );
+      final packet = _createSignalingPacket(signalingPayload);
 
       final pubkeyHex = _pubkeyToHex(recipientPubkey);
       final isRendezvous = _isRendezvousPubkeyHex(pubkeyHex);
@@ -4046,7 +4273,7 @@ class GrassrootsNetwork {
       if (_bleService != null && _bleAvailable) {
         final peerId = _bleService!.getPeerIdForPubkey(recipientPubkey);
         if (peerId != null) {
-          final bytes = await _signedPacketBytesForTransport(
+          final bytes = await _packetBytesForTransport(
             packet: packet,
             transport: PeerTransport.bleDirect,
             recipientPubkey: recipientPubkey,
@@ -4061,7 +4288,7 @@ class GrassrootsNetwork {
       // Fall back to UDP
       if (_udpService != null && _udpAvailable) {
         if (_udpService!.getPeerIdForPubkey(recipientPubkey) != null) {
-          final bytes = await _signedPacketBytesForTransport(
+          final bytes = await _packetBytesForTransport(
             packet: packet,
             transport: PeerTransport.udp,
             recipientPubkey: recipientPubkey,
@@ -4105,10 +4332,7 @@ class GrassrootsNetwork {
     _signalingService.sendSignalingToAddress =
         (recipientPubkey, address, signalingPayload) async {
       if (_udpService == null || !_udpAvailable) return false;
-      final packet = _createSignalingPacket(
-        recipientPubkey,
-        signalingPayload,
-      );
+      final packet = _createSignalingPacket(signalingPayload);
       final pubkeyHex = _pubkeyToHex(recipientPubkey);
       return _sendPacketViaUdp(
         pubkeyHex: pubkeyHex,
@@ -4117,6 +4341,54 @@ class GrassrootsNetwork {
         recipientPubkey: recipientPubkey,
         isRendezvous: true,
       );
+    };
+
+    // A rendezvous server forwarded a redeemed cold-call invite: validate it
+    // against our locally-recorded outstanding invites, register the
+    // redeemer's identity, and surface it (spec §IP Cold-Call — everything
+    // beyond this is GLP-level).
+    _signalingService.onInviteRedeemed = (rvPubkey, inviteId, redeemerPubkey) {
+      final inviteIdHex = _pubkeyToHex(inviteId);
+      final shortId = inviteIdHex.substring(0, 8);
+
+      // Acknowledge to the sender so it stops retrying, regardless of whether
+      // this notification is actionable here (unknown/duplicate) — the sender
+      // already cleared SignalingService's trust gate, and the ack carries no
+      // secret. Without this, a lost first ack would loop the RV's retries.
+      unawaited(_signalingService.sendSignaling?.call(
+        rvPubkey,
+        const SignalingCodec().encode(
+          InviteRedeemedAckMessage(inviteId: inviteId),
+        ),
+      ));
+
+      final outstanding = _outstandingInvites[inviteIdHex];
+      if (outstanding == null) {
+        debugPrint(
+          '[peer-link] redeemed notification for unknown/already-handled '
+          'invite $shortId... (acked)',
+        );
+        return;
+      }
+      final rvHex = _pubkeyToHex(rvPubkey);
+      if (rvHex != outstanding.rvPubkeyHex) {
+        debugPrint(
+          '[peer-link] dropping redeemed notification for $shortId...: '
+          'sender is not the rendezvous server the invite was registered with',
+        );
+        return;
+      }
+      // Single-use locally, mirroring the server-side atomic flip. Expiry is
+      // the rendezvous server's call (it validated the redemption against the
+      // signed ExpiresAt) — we do not second-guess it against our own clock,
+      // which could differ.
+      _outstandingInvites.remove(inviteIdHex);
+      store.dispatch(
+        PeerIdentityRegisteredAction(publicKey: redeemerPubkey),
+      );
+      debugPrint('[peer-link] invite $shortId... redeemed by '
+          '${_pubkeyToHex(redeemerPubkey).substring(0, 8)}...');
+      onPeerLinkRedeemed?.call(redeemerPubkey);
     };
 
     // Hole-punch initiation: a well-connected friend told us to start punching
@@ -4199,15 +4471,15 @@ class GrassrootsNetwork {
     };
   }
 
-  /// Diff each peer's `isReachable` flag against the previous store tick and
-  /// fire the consolidated `onPeerConnected` / `onPeerDisconnected` callbacks
-  /// on transitions. Delegates to the testable top-level
-  /// [processReachabilityTransitions] function so the diff logic is unit-
-  /// testable without a full `GrassrootsNetwork` harness.
+  /// Diff each peer's set of reachable transports against the previous store
+  /// tick and fire the per-transport `onPeerConnected` / `onPeerDisconnected`
+  /// callbacks for every medium that came up or went down. Delegates to the
+  /// testable top-level [processReachabilityTransitions] function so the diff
+  /// logic is unit-testable without a full `GrassrootsNetwork` harness.
   void _processReachabilityTransitions(PeersState peersState) {
     processReachabilityTransitions(
       peersState: peersState,
-      lastKnownReachability: _lastKnownReachability,
+      lastKnownTransports: _lastKnownTransports,
       onConnected: onPeerConnected,
       onDisconnected: onPeerDisconnected,
     );
@@ -4243,8 +4515,8 @@ class GrassrootsNetwork {
     };
 
     // BLE-level disconnect cleans up the per-transport Noise session.
-    // The consolidated application-level onPeerDisconnected is fired by
-    // the reachability subscriber when the *last* live transport drops.
+    // The application-level onPeerDisconnected for the BLE medium is fired by
+    // the reachability subscriber when this peer's BLE session drops.
     _bleService!.onPeerDisconnected = (peer) {
       debugPrint('BLE Peer disconnected: ${peer.displayName}');
       _noiseSessions.reset(PeerTransport.bleDirect, peer.publicKey);
@@ -4855,15 +5127,12 @@ class GrassrootsNetwork {
       linkLocalAddress: normalizedLinkLocal,
       addressCandidates: normalizedCandidates,
     );
-    final packet = GrassrootsPacket(
+    // The ANNOUNCE payload is a self-signed identity record; the frame needs
+    // no further authentication.
+    return GrassrootsPacket(
       type: PacketType.announce,
-      ttl: 0,
-      senderPubkey: identity.publicKey,
       payload: payload,
-      signature: Uint8List(64),
-    );
-    await _protocolHandler.signPacket(packet);
-    return packet.serialize();
+    ).serialize();
   }
 
   /// Send ANNOUNCE with address to a specific friend.
@@ -4889,16 +5158,10 @@ class GrassrootsNetwork {
       address: normalizedAddress,
       addressCandidates: _candidateAddresses(),
     );
-    final packet = GrassrootsPacket(
+    final bytes = GrassrootsPacket(
       type: PacketType.announce,
-      ttl: 0,
-      senderPubkey: identity.publicKey,
-      recipientPubkey: friendPubkey,
       payload: payload,
-      signature: Uint8List(64),
-    );
-    await _protocolHandler.signPacket(packet);
-    final bytes = packet.serialize();
+    ).serialize();
 
     // Try BLE first if available
     if (_bleService != null && _bleAvailable) {
@@ -5026,13 +5289,11 @@ class GrassrootsNetwork {
   }) async {
     final fragmented = _fragmentHandler.fragment(
       payload: payload,
-      senderPubkey: identity.publicKey,
-      recipientPubkey: recipientPubkey,
       messageId: messageId,
     );
 
     for (final fragment in fragmented.fragments) {
-      final bytes = await _signedPacketBytesForTransport(
+      final bytes = await _packetBytesForTransport(
         packet: fragment,
         transport: PeerTransport.bleDirect,
         recipientPubkey: recipientPubkey,
@@ -5047,62 +5308,72 @@ class GrassrootsNetwork {
   }
 }
 
-/// Diff each peer's `isReachable` against the previous tick and fire the
-/// consolidated reachability callbacks on transitions. Pure-ish: the only
-/// side effects are calling [onConnected] / [onDisconnected] and mutating
-/// [lastKnownReachability] in place.
+/// Diff each peer's set of reachable transports against the previous tick and
+/// fire the per-transport reachability callbacks for every medium that came up
+/// or went down. Pure-ish: the only side effects are calling [onConnected] /
+/// [onDisconnected] and mutating [lastKnownTransports] in place.
 ///
-/// Semantics:
-///   - previous absent (treated as `false`) or `false` → current `true`:
-///     fire [onConnected] with the current `PeerState`. (Discovery —
-///     onPeerDiscovered — is surfaced separately at ANNOUNCE receipt, because a
-///     peer's identity is known before its Noise session authenticates.)
-///   - previous `true` → current `false`: fire [onDisconnected].
-///   - reachable peer removed from [peersState.peersList] entirely
-///     (e.g. PeerRemovedAction): fire [onDisconnected] with a minimal
-///     synthetic `PeerState` carrying only the identity, since the original
-///     state is gone.
-///   - state unchanged or one-of-two transports flipping while the other
-///     stays live: no fire.
+/// Semantics (per medium, independently — BLE and IP never interfere):
+///   - a transport reachable now but not last tick: fire [onConnected] with
+///     the peer's public key and that transport. (Discovery — onPeerDiscovered
+///     — is surfaced separately at ANNOUNCE receipt, because a peer's identity
+///     is known before its Noise session authenticates.)
+///   - a transport reachable last tick but not now: fire [onDisconnected] with
+///     the public key and that transport. A peer that loses one of two live
+///     media fires a disconnect for the lost medium while staying reachable
+///     over the other.
+///   - a peer removed from [peersState.peersList] entirely (e.g.
+///     PeerRemovedAction): fire [onDisconnected] for each medium it still held.
+///   - no medium changed: no fire.
 @visibleForTesting
 void processReachabilityTransitions({
   required PeersState peersState,
-  required Map<String, bool> lastKnownReachability,
-  required void Function(PeerState peer)? onConnected,
-  required void Function(PeerState peer)? onDisconnected,
+  required Map<String, Set<MessageTransport>> lastKnownTransports,
+  required void Function(Uint8List publicKey, MessageTransport transport)?
+      onConnected,
+  required void Function(Uint8List publicKey, MessageTransport transport)?
+      onDisconnected,
 }) {
   final seenPubkeys = <String>{};
 
   for (final peer in peersState.peersList) {
     final pk = peer.pubkeyHex;
     seenPubkeys.add(pk);
-    final previous = lastKnownReachability[pk] ?? false;
-    final current = peer.isReachable;
-    if (previous == current) continue;
-    lastKnownReachability[pk] = current;
-    if (current) {
-      onConnected?.call(peer);
+    final previous = lastKnownTransports[pk] ?? const <MessageTransport>{};
+    final current = peer.reachableTransports;
+    if (setEquals(previous, current)) continue;
+
+    for (final t in current.difference(previous)) {
+      onConnected?.call(peer.publicKey, t);
+    }
+    for (final t in previous.difference(current)) {
+      onDisconnected?.call(peer.publicKey, t);
+    }
+
+    // Retain only non-empty sets so an unreachable peer holds no entry and the
+    // removed-while-reachable sweep below stays simple.
+    if (current.isEmpty) {
+      lastKnownTransports.remove(pk);
     } else {
-      onDisconnected?.call(peer);
+      lastKnownTransports[pk] = current;
     }
   }
 
-  // Removed-while-reachable: surface as a disconnect with a synthesized stub.
-  final missing = lastKnownReachability.keys
-      .where((pk) => !seenPubkeys.contains(pk) && lastKnownReachability[pk]!)
+  // Removed-while-reachable: the peer's entry vanished entirely, so surface a
+  // disconnect on each medium it still held.
+  final missing = lastKnownTransports.keys
+      .where((pk) => !seenPubkeys.contains(pk))
       .toList(growable: false);
   for (final pk in missing) {
-    lastKnownReachability.remove(pk);
+    final transports = lastKnownTransports.remove(pk)!;
     final cb = onDisconnected;
     if (cb == null) continue;
-    cb(PeerState(
-      publicKey: Uint8List.fromList([
-        for (var i = 0; i < pk.length; i += 2)
-          int.parse(pk.substring(i, i + 2), radix: 16)
-      ]),
-      nickname: '',
-      connectionState: PeerConnectionState.disconnected,
-      transport: PeerTransport.udp,
-    ));
+    final pubkey = Uint8List.fromList([
+      for (var i = 0; i < pk.length; i += 2)
+        int.parse(pk.substring(i, i + 2), radix: 16)
+    ]);
+    for (final t in transports) {
+      cb(pubkey, t);
+    }
   }
 }

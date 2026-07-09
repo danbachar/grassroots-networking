@@ -35,13 +35,16 @@ PeersState peersReducer(PeersState state, dynamic action) {
       );
     }
 
-    // Dedupe MAC-rotation ghost entries. A derived service UUID identifies the
-    // logical peer (Grassroots-prefix + SHA-256(pubkey)[0..8]) and is stable
-    // across BLE address rotations, while the deviceId / pathId is tied to
-    // the radio MAC (Android) or CBPeripheral identifier (iOS without
-    // bonding) and rotates ~every 15 min. Without this cleanup the map
-    // accumulates one dead entry per rotation, each one keeps getting
-    // re-dialed by `_onAdvertisement`, and we end up in a status-133 storm.
+    // Dedupe MAC-rotation ghost entries. Within one 15-minute slot the
+    // advertised service UUID (Grassroots prefix + rotating per-slot suffix)
+    // identifies the logical peer, while the deviceId / pathId is tied to the
+    // radio MAC (Android) or CBPeripheral identifier (iOS without bonding),
+    // which can rotate mid-slot. Without this cleanup the map accumulates one
+    // dead entry per rotation, each one keeps getting re-dialed by
+    // `_onAdvertisement`, and we end up in a status-133 storm. Across slot
+    // boundaries the UUID itself rotates too, so this exact-match dedup no
+    // longer fires — cross-slot ghosts are handled by the transport's
+    // slot-candidate matching and swept by StaleDiscoveredBlePeersRemovedAction.
     //
     // Only prune entries that are NOT currently connected or in-flight: if
     // we still have a live or pending path on the old MAC, leave it alone —
@@ -493,7 +496,39 @@ PeersState peersReducer(PeersState state, dynamic action) {
         peers: Map.from(state.peers)..[pubkeyHex] = updated,
       );
     }
-    return state;
+    // Unknown peer: GLP fed an address (via putPeerAddress) for a peer we have
+    // not yet met. Materialize a minimal dial-book entry so send and
+    // reconnection can reach it. An empty address has nothing to store.
+    final newAddress = action.address.isEmpty ? null : action.address;
+    if (newAddress == null) return state;
+    final created = PeerState(
+      publicKey: action.publicKey,
+      nickname: '',
+      connectionState: PeerConnectionState.disconnected,
+      transport: PeerTransport.udp,
+      udpAddress: newAddress,
+      udpAddressCandidates: normalizeAddressStrings([newAddress]),
+    );
+    return state.copyWith(
+      peers: Map.from(state.peers)..[pubkeyHex] = created,
+    );
+  }
+
+  if (action is PeerIdentityRegisteredAction) {
+    final pubkeyHex = _pubkeyToHex(action.publicKey);
+    if (state.peers.containsKey(pubkeyHex)) return state;
+    // Identity learned out-of-band (cold-call invite): a minimal disconnected
+    // entry with no address — reachability and addresses arrive later via
+    // sessions, ANNOUNCE, or putPeerAddress.
+    final created = PeerState(
+      publicKey: action.publicKey,
+      nickname: '',
+      connectionState: PeerConnectionState.disconnected,
+      transport: PeerTransport.udp,
+    );
+    return state.copyWith(
+      peers: Map.from(state.peers)..[pubkeyHex] = created,
+    );
   }
 
   if (action is PeerFriendListUpdatedAction) {

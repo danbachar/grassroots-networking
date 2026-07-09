@@ -4,9 +4,8 @@
 /// It handles:
 /// - BLE Central/Peripheral dual-mode operation
 /// - Packet fragmentation and reassembly
-/// - Mesh routing with TTL-based relay
 /// - Duplicate detection via Bloom filter
-/// - Store-and-forward for offline peers
+/// - Local queueing of our own outbound messages for offline peers
 /// 
 /// ## Usage
 /// 
@@ -28,8 +27,8 @@
 ///   // Handle incoming GSG block
 /// };
 /// 
-/// grassroots.onPeerConnected = (peer) {
-///   // New peer available
+/// grassroots.onPeerConnected = (publicKey, transport) {
+///   // peer reachable over `transport` (BLE or UDP)
 /// };
 /// 
 /// // Initialize and start

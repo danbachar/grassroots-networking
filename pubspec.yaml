@@ -11,8 +11,10 @@ dependencies:
   flutter:
     sdk: flutter
   
-  # Unified BLE transport (central + peripheral, bondless)
-  grassroots_bluetooth_layer: ^0.2.0
+  # Unified BLE transport (central + peripheral, bondless). Requires >= 0.3.0
+  # for the advertised/GATT service-UUID decoupling (gattServiceUuid) that the
+  # rotating per-slot beacon depends on.
+  grassroots_bluetooth_layer: ^0.3.0
   
   # Cryptography (Ed25519 signing, SHA-256 hashing)
   cryptography: ^2.9.0

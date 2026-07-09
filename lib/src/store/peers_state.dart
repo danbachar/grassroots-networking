@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../models/peer.dart';
 import '../transport/address_utils.dart';
+import 'messages_actions.dart';
 
 /// A discovered BLE peer before identity (ANNOUNCE) is exchanged.
 ///
@@ -252,14 +253,25 @@ class PeerState {
 
   /// Whether this peer is reachable right now via any *authenticated*
   /// transport. This is the canonical "can a send succeed without queueing"
-  /// predicate and the basis for the consolidated
-  /// onPeerConnected/onPeerDisconnected callbacks on [GrassrootsNetwork].
+  /// predicate and the basis for [isReachable]'s public surface,
+  /// `GrassrootsNetwork.isPeerReachable`.
   ///
   /// Reachability requires a completed Noise session — spec
   /// `docs/GLP_Networking_API/sections/ip.tex` §IP Connection: connected fires
   /// once the stream is "established and authenticated". A raw BLE/UDX link
   /// without a session does not count as reachable.
   bool get isReachable => bleAuthenticated || hasLiveUdpConnection;
+
+  /// The transports over which this peer is reachable *right now* — one entry
+  /// per medium that holds a completed Noise session. Empty when the peer is
+  /// unreachable. This is the projection behind `GrassrootsNetwork.peerTransports`
+  /// and the per-transport `onPeerConnected` / `onPeerDisconnected` callbacks.
+  /// Iterated BLE-before-IP so callers observe a stable order. Spec
+  /// `docs/GLP_Networking_API/sections/api.tex` §Connection and Reachability.
+  Set<MessageTransport> get reachableTransports => {
+        if (bleAuthenticated) MessageTransport.ble,
+        if (hasLiveUdpConnection) MessageTransport.udp,
+      };
 
   /// The currently active transport based on available connections.
   /// BLE is preferred when available; falls back to UDP, then stored value.
@@ -490,11 +502,13 @@ class PeersState {
   DiscoveredPeerState? getDiscoveredBlePeer(String deviceId) =>
       discoveredBlePeers[deviceId];
 
-  /// Find every discovered BLE peer advertising the given derived service
-  /// UUID, regardless of radio MAC / CBPeripheral identifier. The service
-  /// UUID is `Grassroots-prefix + SHA-256(pubkey)[0..8]` and is stable across
-  /// MAC rotations, so this is how we recognise the same logical peer when
-  /// its radio identifier changes (frequent on iOS without bonding).
+  /// Find every discovered BLE peer advertising the given service UUID,
+  /// regardless of radio MAC / CBPeripheral identifier. The advertised UUID
+  /// is the rotating per-slot beacon (Grassroots prefix + SHA-256("glp ble
+  /// suffix" | pubkey | slot)[0..8]): stable within a slot — which is how we
+  /// recognise the same logical peer when its radio identifier changes
+  /// mid-slot — but different each slot, so slot-spanning recognition must
+  /// query once per candidate UUID (the transport's `candidateServiceUuids`).
   ///
   /// Returns an empty iterable when `serviceUuid` is null/empty so callers
   /// don't have to null-check.
