@@ -87,11 +87,11 @@ function numDot(s, o) {
     x: M, y: 1.75, w: 8.6, h: 0.3, margin: 0,
     fontFace: BODY, fontSize: 12, bold: true, charSpacing: 2, color: TEAL,
   });
-  s.addText('Measuring what\nwe currently guess', {
+  s.addText('NAT detection and\nhole punching', {
     x: M, y: 2.25, w: 8.6, h: 1.9, margin: 0,
     fontFace: HEAD, fontSize: 46, bold: true, color: WHITE, lineSpacingMultiple: 0.95,
   });
-  s.addText('NAT detection and hole-punching, using your friends instead of servers', {
+  s.addText('Determining NAT behaviour from the social graph, without designated servers', {
     x: M, y: 4.25, w: 8.4, h: 0.5, margin: 0,
     fontFace: BODY, fontSize: 17, color: 'B7C4CC',
   });
@@ -100,18 +100,18 @@ function numDot(s, o) {
     { text: '   ·   dan.bachar@campus.technion.ac.il', options: { color: MUTED } },
   ], { x: M, y: 6.35, w: 8.6, h: 0.35, margin: 0, fontFace: BODY, fontSize: 13 });
 
-  s.addNotes('Framing: this is not a survey project. The deliverable is an algorithm — NAT detection without designated servers — validated against a proper oracle. The survey falls out of it.');
+  s.addNotes('The deliverable is the detection algorithm, validated against an RFC 5780 reference implementation. The prevalence measurement is a supporting result derived from the same campaign.');
 }
 
 // ============================================================ 2. CONTEXT
 {
   const s = p.addSlide();
-  titleBar(s, 'What Grassroots Networking is', 'Context', false);
+  titleBar(s, 'Grassroots Networking', 'System context', false);
 
   const items = [
-    ['No infrastructure', 'Messages go straight from sender to recipient. No relay ever carries another peer\'s traffic — that is the founding claim, and every server we add erodes it.'],
-    ['Two transports', 'BLE for peers in range, UDP/UDX for everyone else. Same interface: connect, send, receive. BLE wins when both are available.'],
-    ['Identity is a key pair', 'An Ed25519 public key is the peer. Nicknames are cosmetic; every trust decision is a signature check.'],
+    ['No infrastructure', 'Messages are delivered directly from sender to recipient. The system is designed to operate without dedicated servers, so every anchor we add weakens that property.'],
+    ['Two transports', 'BLE for peers in physical proximity, UDP over UDX for remote peers. Both expose the same interface, and BLE is preferred where both are available.'],
+    ['Identity is a key pair', 'An Ed25519 public key identifies the peer. Nicknames are cosmetic, and every trust decision reduces to a signature check.'],
   ];
   items.forEach(([h, b], i) => {
     const x = M + i * (CW / 3 + 0.06), w = CW / 3 - 0.2;
@@ -130,17 +130,17 @@ function numDot(s, o) {
     });
   });
 
-  s.addText('The IP transport is where this project lives — and it is the half we have never measured.', {
+  s.addText('The Internet relation is the subject of this project. Its NAT behaviour has never been measured.', {
     x: M, y: 6.05, w: CW, h: 0.45, margin: 0,
     fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
   });
-  s.addNotes('Keep this short. The point of the slide is that the no-infrastructure claim is falsifiable, and nobody has tried to falsify it yet.');
+  s.addNotes('Context only. The relevant point is that the no-infrastructure property is testable, and has not yet been tested.');
 }
 
 // ============================================================ 3. TODAY'S PATH
 {
   const s = p.addSlide();
-  titleBar(s, 'What happens today when two peers connect', 'The current path', false);
+  titleBar(s, 'The current IP path', 'Implementation today', false);
 
   const steps = [
     ['Learn my address', 'HTTPS to seeip.org,\ncached 5 min'],
@@ -171,35 +171,35 @@ function numDot(s, o) {
   });
 
   card(s, { x: M, y: 5.0, w: CW, h: 1.55, fill: 'FBF0E8' });
-  s.addText('Three things this path never does', {
+  s.addText('Not implemented', {
     x: M + 0.35, y: 5.2, w: 4.2, h: 0.35, margin: 0,
     fontFace: HEAD, fontSize: 15, bold: true, color: AMBER,
   });
   s.addText([
-    { text: 'Discover the NAT-mapped port. ', options: { bold: true } },
-    { text: 'We advertise our public IP paired with our ', options: {} },
+    { text: 'Mapped-port discovery. ', options: { bold: true } },
+    { text: 'We advertise the discovered public IP paired with our own ', options: {} },
     { text: 'local', options: { italic: true } },
-    { text: ' port — a guess.', options: {} },
+    { text: ' port.', options: {} },
   ], { x: M + 0.35, y: 5.58, w: CW - 0.7, h: 0.28, margin: 0, fontFace: BODY, fontSize: 12.5, color: '4A3529' });
   s.addText([
-    { text: 'Check whether the punch worked. ', options: { bold: true } },
-    { text: 'The closed-loop mode has no production caller and cannot run — the multiplexer owns socket reads.', options: {} },
+    { text: 'Punch verification. ', options: { bold: true } },
+    { text: 'The closed-loop mode has no production caller and cannot run, since the multiplexer owns socket reads.', options: {} },
   ], { x: M + 0.35, y: 5.88, w: CW - 0.7, h: 0.28, margin: 0, fontFace: BODY, fontSize: 12.5, color: '4A3529' });
   s.addText([
-    { text: 'Record anything. ', options: { bold: true } },
-    { text: 'No timestamps, no attempt id; the reducer discards the failure reason. Nothing is measurable after the fact.', options: {} },
+    { text: 'Instrumentation. ', options: { bold: true } },
+    { text: 'No timestamps and no attempt identifier, and the reducer discards the failure reason.', options: {} },
   ], { x: M + 0.35, y: 6.18, w: CW - 0.7, h: 0.28, margin: 0, fontFace: BODY, fontSize: 12.5, color: '4A3529' });
 
-  s.addNotes('Every constant here was read out of the source, not the design docs. 10 s announce is also the de facto NAT keepalive — there is no dedicated one.');
+  s.addNotes('Every constant is taken from the source rather than the design documents. The 10 s announce also serves as the de facto NAT keepalive, as there is no dedicated one.');
 }
 
 // ============================================================ 4. THE BLIND SPOT (dark)
 {
   const s = p.addSlide();
   s.background = { color: INK };
-  titleBar(s, 'The blind spot that bites hardest', 'One boolean, two wrong answers', true);
+  titleBar(s, 'Self-classification', 'isWellConnected', true);
 
-  s.addText('A phone behind carrier NAT asks seeip.org for its address. It gets the carrier’s outer public IP — it never sees its own 100.64 inner address. So it advertises a globally routable IP, and every peer agrees:', {
+  s.addText('A handset behind a carrier NAT requests its address from the reflection service and receives the carrier’s outer public IP, as it never observes its own 100.64 inner address. It therefore advertises a globally routable address, and is classified accordingly by itself and by its peers:', {
     x: M, y: 1.95, w: CW, h: 0.72, margin: 0,
     fontFace: BODY, fontSize: 15, color: 'B7C4CC', lineSpacingMultiple: 1.1,
   });
@@ -209,29 +209,29 @@ function numDot(s, o) {
     x: M + 0.4, y: 3.12, w: 5.2, h: 0.4, margin: 0,
     fontFace: 'Courier New', fontSize: 19, bold: true, color: WHITE,
   });
-  s.addText('The UI tells the user they are well-connected.', {
+  s.addText('Reported to the user as well-connected.', {
     x: M + 0.4, y: 3.6, w: 5.2, h: 0.35, margin: 0,
     fontFace: BODY, fontSize: 13, color: '93A4AE',
   });
 
   card(s, { x: M + 6.35, y: 2.85, w: 5.75, h: 1.5, fill: '3A2A22' });
-  s.addText('Wrong twice over', {
+  s.addText('Two errors', {
     x: M + 6.75, y: 3.05, w: 5.0, h: 0.32, margin: 0,
     fontFace: HEAD, fontSize: 15, bold: true, color: 'E9A876',
   });
-  s.addText('The advertised port is the local port, not the mapped one — and the carrier NAT will not accept unsolicited inbound at all.', {
+  s.addText('The advertised port is the local port rather than the mapped one, and the carrier NAT does not accept unsolicited inbound traffic at all.', {
     x: M + 6.75, y: 3.42, w: 5.0, h: 0.7, margin: 0,
     fontFace: BODY, fontSize: 13, color: 'D8C3B4', lineSpacingMultiple: 1.05,
   });
 
-  s.addText('Three live behaviours run off that false positive', {
+  s.addText('Consequences', {
     x: M, y: 4.65, w: CW, h: 0.35, margin: 0,
     fontFace: HEAD, fontSize: 16, bold: true, color: WHITE,
   });
   const cons = [
-    'The pre-connect punch is suppressed for peers that look public — so it is skipped for exactly the peers that need it.',
-    'The phone starts acting as an address reflector and rendezvous facilitator for its friends.',
-    'Nothing anywhere distinguishes “has a public IP” from “is reachable at that ip:port.”',
+    'The pre-connect punch is suppressed for peers that appear public, and is therefore skipped for the peers that require it.',
+    'The device begins acting as an address reflector and rendezvous facilitator for its friends.',
+    'Nothing distinguishes having a public address from being reachable at it.',
   ];
   cons.forEach((t, i) => {
     const y = 5.12 + i * 0.44;
@@ -244,19 +244,19 @@ function numDot(s, o) {
       fontFace: BODY, fontSize: 13.5, color: 'C3CFD6',
     });
   });
-  s.addNotes('This is the slide to slow down on. It is a real defect, confirmed in source at grassroots_network.dart:3369-3373, and it is also the cleanest motivation for the whole project.');
+  s.addNotes('Confirmed in source at grassroots_network.dart:3369-3373. This defect is the clearest motivation for the project.');
 }
 
 // ============================================================ 5. WHAT WE DON'T KNOW
 {
   const s = p.addSlide();
-  titleBar(s, 'What we do not know', 'The evidence gap', false);
+  titleBar(s, 'Gaps in the current implementation', 'What we cannot determine', false);
 
   const gaps = [
-    ['No NAT classification', 'Not one line of code determines mapping or filtering behaviour. A routability check on a string stands in for it.'],
-    ['No mapped-port discovery', 'The true port only ever arrives from a peer that is already connected — useless for the case where nothing has connected yet.'],
-    ['No dial-back, no witnesses', '“Am I reachable from outside?” is asserted from a string prefix. It is never tested.'],
-    ['No instrumentation', 'No Stopwatch anywhere in lib/. Punch outcome is a four-value enum with no timestamps and the reason discarded.'],
+    ['No NAT classification', 'No code determines mapping or filtering behaviour; a routability check over the advertised string stands in for it.'],
+    ['No mapped-port discovery', 'The mapped port arrives only from a peer already connected, which is of no use for a first contact.'],
+    ['No dial-back, no witnesses', 'Reachability from outside is asserted from an address prefix and never tested.'],
+    ['No instrumentation', 'Punch outcomes are a four-value enumeration without timestamps, and the failure reason is discarded.'],
   ];
   gaps.forEach(([h, b], i) => {
     const col = i % 2, row = Math.floor(i / 2);
@@ -277,17 +277,17 @@ function numDot(s, o) {
     });
   });
 
-  s.addText('Every give-up constant in the transport — 2 s punch, 10 s handshake, 15 s backoff, 60 s retry — was chosen by intuition. None of them came from a measurement.', {
+  s.addText('Every constant in the transport — the 2 s punch, the 10 s handshake, the 15 s backoff, the 60 s retry — was chosen by intuition rather than derived from measurement.', {
     x: M, y: 6.35, w: CW, h: 0.6, margin: 0,
     fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK, lineSpacingMultiple: 1.1,
   });
-  s.addNotes('Ranked by how much each blocks a decision. The instrumentation gap is the one that makes the paper impossible, not just the product worse.');
+  s.addNotes('Ordered by how far each blocks a decision. The instrumentation gap also prevents any latency or robustness result from being computed after the fact.');
 }
 
 // ============================================================ 6. USE CASE
 {
   const s = p.addSlide();
-  titleBar(s, 'Maya cannot reach Noam, and nobody finds out why', 'A concrete failure', false);
+  titleBar(s, 'Failure walkthrough', 'CGNAT handset to home NAT', false);
 
   card(s, { x: M, y: 1.9, w: 3.5, h: 1.0 });
   s.addText('MAYA', { x: M + 0.3, y: 2.02, w: 2.9, h: 0.28, margin: 0, fontFace: BODY, fontSize: 11, bold: true, charSpacing: 1.5, color: TEAL });
@@ -323,15 +323,15 @@ function numDot(s, o) {
     x: M, y: 6.5, w: CW, h: 0.5, margin: 0,
     fontFace: BODY, fontSize: 13.5, italic: true, color: TEAL_DK,
   });
-  s.addNotes('Every step here is what the current code actually does, traced through the source. The last line is the important one — success teaches us nothing either.');
+  s.addNotes('Each step is traced through the current implementation. Note that a successful attempt is equally uninformative, as nothing distinguishes it from a lucky port guess.');
 }
 
 // ============================================================ 7. THE IDEA
 {
   const s = p.addSlide();
-  titleBar(s, 'Ask your friends to dial you back', 'The idea', false);
+  titleBar(s, 'Witness-based detection', 'Relayed dial-back', false);
 
-  s.addText('libp2p’s autoNAT leans on a small set of well-known dial-back nodes. We have a social graph instead. The hard half is filtering behaviour: it needs an inbound packet from an endpoint you have never sent to — which no single witness can produce for itself.', {
+  s.addText('autoNAT depends in practice on a small set of well-known dial-back nodes, whereas GN already maintains a social graph of authenticated friends. Filtering behaviour is the harder half, as it requires an inbound packet from an endpoint the probe has never contacted, which no single witness can produce for itself.', {
     x: M, y: 1.85, w: CW, h: 0.7, margin: 0,
     fontFace: BODY, fontSize: 14.5, color: '3E4C57', lineSpacingMultiple: 1.1,
   });
@@ -348,7 +348,7 @@ function numDot(s, o) {
   };
   nodeAt(M, 'Probe', 'the device', TEAL);
   nodeAt(M + 4.0, 'Witness 1', 'a friend', TEAL);
-  nodeAt(M + 8.0, 'Witness 2', 'never contacted', AMBER);
+  nodeAt(M + 8.0, 'Witness 2', 'not contacted', AMBER);
 
   const arrow = (x1, x2, y, label, color) => {
     s.addShape(p.ShapeType.line, {
@@ -360,8 +360,8 @@ function numDot(s, o) {
       fontFace: BODY, fontSize: 11.5, color: color, align: 'center',
     });
   };
-  arrow(M + 2.15, M + 3.95, dy + 0.45, 'nonce + my mapped tuple', TEAL);
-  arrow(M + 6.15, M + 7.95, dy + 0.45, 'dial this peer, from you', TEAL);
+  arrow(M + 2.15, M + 3.95, dy + 0.45, 'nonce, mapped address', TEAL);
+  arrow(M + 6.15, M + 7.95, dy + 0.45, 'relay the dial-back', TEAL);
   s.addShape(p.ShapeType.line, {
     x: M + 1.05, y: dy + 0.95, w: 0, h: 0.62, line: { color: AMBER, width: 1.5 },
   });
@@ -371,7 +371,7 @@ function numDot(s, o) {
   s.addShape(p.ShapeType.line, {
     x: M + 9.05, y: dy + 0.95, w: 0, h: 0.62, line: { color: AMBER, width: 1.5 },
   });
-  s.addText('dial-back carrying the nonce  —  from an endpoint the probe never sent to', {
+  s.addText('dial-back carrying the nonce, from an endpoint the probe has not contacted', {
     x: M + 1.05, y: dy + 1.62, w: 8.0, h: 0.3, margin: 0,
     fontFace: BODY, fontSize: 11.5, color: AMBER, align: 'center',
   });
@@ -386,29 +386,29 @@ function numDot(s, o) {
   s.addText('→ EIF / ADF / APDF', { x: M + 10.5, y: dy + 1.6, w: 1.5, h: 0.3, margin: 0, fontFace: BODY, fontSize: 10.5, italic: true, color: TEAL_DK });
 
   s.addText([
-    { text: 'The trap: ', options: { bold: true, color: AMBER } },
-    { text: 'witnesses are exactly the peers you already send to — ANNOUNCE every 10 s, ten punch datagrams per attempt. A dial-back from an endpoint you contacted traverses a hole ', options: { color: '3E4C57' } },
-    { text: 'you', options: { color: '3E4C57', italic: true } },
-    { text: ' opened, and reports every NAT as far more permissive than it is. The send-history guard is not optional.', options: { color: '3E4C57' } },
+    { text: 'Contamination: ', options: { bold: true, color: AMBER } },
+    { text: 'witnesses are by construction the peers the device already transmits to, through the 10 s ANNOUNCE and roughly ten punch datagrams per attempt. A dial-back from a previously contacted endpoint traverses a mapping the probe ', options: { color: '3E4C57' } },
+    { text: 'itself', options: { color: '3E4C57', italic: true } },
+    { text: ' opened, and biases the result towards reporting NATs as more permissive than they are. A per-test send history is required.', options: { color: '3E4C57' } },
   ], { x: M, y: 6.15, w: CW, h: 0.75, margin: 0, fontFace: BODY, fontSize: 13, lineSpacingMultiple: 1.08 });
 
-  s.addNotes('The contamination guard is the single most important design point in the project. Without it the field results are wrong in a direction that looks like good news.');
+  s.addNotes('The contamination guard is the central validity requirement. Without it the results are biased towards permissiveness, which is the direction least likely to be questioned.');
 }
 
 // ============================================================ 8. CORRECTIONS
 {
   const s = p.addSlide();
-  titleBar(s, 'Two things the first write-up got wrong', 'Framing', false);
+  titleBar(s, 'Measurand and baseline', 'What we measure, and against what', false);
 
   const cols = [
-    ['There is no libp2p in this stack',
-     'The IP transport is grassroots_dart_udx 2.1.0, a fork of dart_udx, with its own signaling and its own hole-punch path.',
-     'Building the probe on dart_libp2p would open a second socket — a different NAT mapping, measuring a different thing, and producing a decision rule for a transport we do not ship.',
-     'Build inside grassroots_networking, probing from the transport’s own socket.'],
-    ['autoNAT is not a NAT classifier',
-     'v1 answers “am I publicly reachable”. v2 answers “is this address dialable”, per address, with a nonce’d dial-back. Neither emits a mapping or filtering label.',
-     '“Accuracy versus autoNAT” compares two things with no shared measurand.',
-     'Head-to-head is reachability-only; classification ground truth is an RFC 5780 oracle we stand up ourselves.'],
+    ['The measurand is a tuple',
+     'Mapping behaviour × filtering behaviour × port preservation × mapping lifetime, with CGNAT status and IPv6 availability recorded alongside.',
+     'Reported per address family and per translation path: NAT44, NAT64 with 464XLAT, or native IPv6, where mapping and port preservation are not applicable rather than absent.',
+     'A single-label NAT type may be derived for presentation, but is never the measurand.'],
+    ['autoNAT reports reachability',
+     'Version 1 reports whether a node is publicly reachable; version 2 reports whether a given address is dialable. Neither emits a mapping or filtering label.',
+     'The two therefore share no measurand with the classification question, and cannot serve as its ground truth.',
+     'The comparison is restricted to reachability; classification is validated against an RFC 5780 server we operate.'],
   ];
   cols.forEach(([h, what, why, fix], i) => {
     const x = M + i * (CW / 2 + 0.1), w = CW / 2 - 0.1;
@@ -435,23 +435,23 @@ function numDot(s, o) {
     });
   });
 
-  s.addText('Neither correction shrinks the project. Both make it a study of our own system rather than of someone else’s.', {
+  s.addText('The probe is implemented inside grassroots_networking and sends from the transport’s own socket, since a second socket receives a different mapping.', {
     x: M, y: 6.5, w: CW, h: 0.4, margin: 0,
     fontFace: BODY, fontSize: 14.5, italic: true, color: TEAL_DK,
   });
-  s.addNotes('Say plainly that revision 1 was written before anyone read the transport source. That is fine — it is why we read it.');
+  s.addNotes('The measurand and the baseline are separate questions: autoNAT bounds the reachability comparison, and the RFC 5780 server supplies the classification ground truth.');
 }
 
 // ============================================================ 9. RESEARCH QUESTIONS
 {
   const s = p.addSlide();
-  titleBar(s, 'What we are actually asking', 'Research questions', false);
+  titleBar(s, 'Research questions', 'Four axes', false);
 
   const rqs = [
-    ['Can social-graph witnesses replace designated servers?', 'Specify and validate a witness-based algorithm that recovers mapping and filtering behaviour, and measure its agreement with an RFC 5780 oracle.'],
-    ['What does decentralization cost?', 'False-negative rate and time-to-verdict against witness count k and byzantine fraction f, with lying witnesses we operate. And the constraint that probably dominates: P(≥k witnesses online and dialable).'],
-    ['What is the NAT reality for a population like ours?', 'Characterize each stratum on our own handsets — carrier and APN for cellular, ISP and CGNAT status for residential — then weight by published subscriber counts and per-AS end-user estimates. Cellular and residential reported apart, as an assumption bound, never a confidence interval.'],
-    ['What should the transport do at dial time?', 'An empirical decision rule — direct, anchor-mediated, or give up — over the inputs the transport actually holds when it must decide.'],
+    ['Can social-graph peers replace designated dial-back servers?', 'We specify a witness-based algorithm that recovers mapping and filtering behaviour, and quantify its agreement with an RFC 5780 reference implementation.'],
+    ['What does decentralization cost?', 'How the false-negative rate and time to verdict vary with witness count k and byzantine fraction f, using dishonest witnesses we operate, together with the availability constraint P(≥k online and dialable).'],
+    ['Which NAT behaviours occur in our users’ networks, and how prevalent are they?', 'Each stratum is characterized on our own handsets, by carrier and APN for cellular and by ISP and CGNAT status for residential, and the strata are weighted by published subscriber counts and per-AS end-user estimates.'],
+    ['What should the transport do at dial time?', 'A decision rule over the inputs the transport holds at the moment it decides: attempt directly, request mediation, or abort.'],
   ];
   rqs.forEach(([h, b], i) => {
     const y = 1.95 + i * 1.15;
@@ -468,17 +468,17 @@ function numDot(s, o) {
 
   card(s, { x: M, y: 6.4, w: CW, h: 0.72, fill: 'E7F1F1' });
   s.addText([
-    { text: 'Measure a tuple, not a “NAT type”:  ', options: { bold: true, color: TEAL_DK } },
-    { text: 'mapping behaviour × filtering behaviour × port preservation × mapping lifetime, plus CGNAT-suspected and IPv6 availability. Any single label is a derived column, marked as such.', options: { color: '3E4C57' } },
+    { text: 'Denominator:  ', options: { bold: true, color: TEAL_DK } },
+    { text: 'consumer-APN mobile lines and residential broadband lines in the countries covered, at the date of measurement, rather than devices, humans, or GN users. No confidence interval is computable, as the design contains no probabilistic sampling.', options: { color: '3E4C57' } },
   ], { x: M + 0.35, y: 6.55, w: CW - 0.7, h: 0.45, margin: 0, fontFace: BODY, fontSize: 12.5, lineSpacingMultiple: 1.05 });
 
-  s.addNotes('RQ2 is the one with a real chance of a surprising answer: witness availability may dominate everything else, and that finding is more useful to us than the accuracy curve.');
+  s.addNotes('RQ2 is the most likely source of a surprising result, as witness availability may dominate the accuracy question, which would be the more useful finding for the transport.');
 }
 
 // ============================================================ 10. MILESTONES
 {
   const s = p.addSlide();
-  titleBar(s, 'Six months, with exit criteria', 'Milestones', false);
+  titleBar(s, 'Milestones', 'Six months, with exit criteria', false);
 
   const ms = [
     ['1', 'Scope + strata', 'Measurand in RFC 4787/5780 terms, threat model, aggregation rule, stratum design and testbed inventory', 'Design doc with the test-to-witness-topology table; strata defined, weight sources named, kit list costed'],
@@ -515,26 +515,26 @@ function numDot(s, o) {
     fontFace: BODY, fontSize: 9.5, bold: true, charSpacing: 1.5, color: MUTED,
   });
 
-  s.addText('Start the IP allocation and firewall work in week 1 — that is latency you cannot absorb in month 2.', {
+  s.addText('Address allocation and firewall rules are procured in week 1, as they gate month 2.', {
     x: M, y: 6.35, w: CW, h: 0.4, margin: 0,
     fontFace: BODY, fontSize: 13.5, italic: true, color: AMBER,
   });
-  s.addNotes('Primary claim is the algorithm. Broader testbed coverage — more carriers, more countries via travelling handsets — is explicitly if-time-permits; six months does not hold both. Each added SIM is another stratum cell, not more generality.');
+  s.addNotes('The primary claim is the algorithm. Broader testbed coverage, through further carriers and countries, is pursued if time permits; each additional SIM covers one further stratum cell rather than adding generality.');
 }
 
 // ============================================================ 11. CLOSING (dark)
 {
   const s = p.addSlide();
   s.background = { color: INK };
-  titleBar(s, 'Decisions to lock before starting', 'Open questions', true);
+  titleBar(s, 'Open decisions', 'To settle before the work begins', true);
 
   const qs = [
-    ['Stack', 'Confirm dart_libp2p is rejected and the probe lives on the transport’s own socket.'],
-    ['Baseline shape', 'go-libp2p sidecar (high fidelity, Android-only) or same-socket reimplementation?'],
-    ['Primary claim', 'The algorithm or the measurement? Both cannot be first-class in six months.'],
-    ['Oracle hosting', 'Who provisions the dual-homed server — and can it come from the /96 already reserved?'],
-    ['Anchor IPv4', 'The data-plane rule is IPv6-only, excluding exactly the CGNAT population we target.'],
-    ['Testbed budget', 'How many handsets and SIMs, and which carriers? Each SIM buys one (carrier, APN, plan) cell — two per carrier before homogeneity is checked rather than assumed.'],
+    ['Primary claim', 'The algorithm or the measurement? Both cannot be first-class within six months.'],
+    ['Baseline', 'The reference implementation as a sidecar, faithful but Android-only, or a reimplementation over our own socket.'],
+    ['Oracle hosting', 'Who provisions the reference server, and can its alternate addresses come from the block already reserved.'],
+    ['Anchor IPv4', 'The anchor’s data-plane rule is IPv6-only, which excludes the IPv4-only CGNAT population we target.'],
+    ['Testbed budget', 'Each carrier is a candidate stratum, but a SIM covers one carrier, APN and plan; two per carrier are needed before homogeneity is checked rather than assumed.'],
+    ['Instrumentation', 'Whether the per-attempt record lands in main as a permanent subsystem or in a measurement branch.'],
   ];
   qs.forEach(([h, b], i) => {
     const col = i % 2, row = Math.floor(i / 2);
@@ -552,11 +552,11 @@ function numDot(s, o) {
 
   card(s, { x: M, y: 5.75, w: CW, h: 1.0, fill: INK_SOFT });
   s.addText([
-    { text: 'Also independent of this project: ', options: { bold: true, color: 'E9A876' } },
-    { text: 'the punch target from PUNCH_INITIATE is never checked for global routability, the mediator’s pending map has no TTL, and the stream framer trusts an unbounded 32-bit length. Someone’s backlog needs these.', options: { color: 'B7C4CC' } },
+    { text: 'Independent of this project: ', options: { bold: true, color: 'E9A876' } },
+    { text: 'the punch target from PUNCH_INITIATE is not checked for global routability, the mediator’s pending map has no TTL, and the stream framer trusts an unbounded 32-bit length. Their assignment should be settled in advance.', options: { color: 'B7C4CC' } },
   ], { x: M + 0.4, y: 5.98, w: CW - 0.8, h: 0.6, margin: 0, fontFace: BODY, fontSize: 12.5, lineSpacingMultiple: 1.08 });
 
-  s.addNotes('Close on the fact that the audit turned up three production defects on the way. The project pays for itself before it starts.');
+  s.addNotes('The three implementation defects listed were found while surveying the transport, and are independent of whether the project proceeds.');
 }
 
 p.writeFile({ fileName: 'grassroots-nat-project.pptx' }).then((f) => console.log('wrote', f));
