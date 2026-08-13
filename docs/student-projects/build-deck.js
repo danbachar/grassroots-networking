@@ -354,12 +354,12 @@ function card(s, o) {
 // ============================================================ 9 · plan
 {
   const s = p.addSlide();
-  title(s, 'The six-month plan', 'Sequence', false);
+  title(s, 'One semester', 'Sequence', false);
 
   const phases = [
-    ['Months 1–2', 'Measurand and adversary model; reference server; labeled bench', TEAL],
-    ['Months 3–4', 'Detection algorithm; autoNAT baseline; the k against f sweep', TEAL],
-    ['Months 5–6', 'Strata campaign; prevalence; decision rule; submission', AMBER],
+    ['Weeks 1–3', 'Onboarding; a STUN client on the transport\u2019s own socket. Go/no-go.', TEAL],
+    ['Weeks 4–10', 'The oracle and labeled bench; then the witness protocol and its classifier.', TEAL],
+    ['Weeks 11–15', 'Measurement on our own devices across reachable networks; write-up.', AMBER],
   ];
   phases.forEach(([when, what, color], i) => {
     const y = 2.6 + i * 1.3;
@@ -377,11 +377,11 @@ function card(s, o) {
     });
   });
 
-  s.addText('Week one: two public addresses, firewall rules, SIMs and handsets. They gate month two.', {
+  s.addText('Week one: two public addresses, firewall rules, SIMs and handsets. They gate week four.', {
     x: M, y: 6.35, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: AMBER,
   });
 
-  s.addNotes('Every milestone carries an exit criterion in the written brief: ninety-five percent agreement with construction labels on the bench, ninety percent for the witness algorithm, and three adversarial properties proven in tests before the campaign begins.');
+  s.addNotes('Every phase carries an exit criterion in the written brief. The week-3 checkpoint is code rather than a document: a reflexive address obtained over the transport\u2019s own socket, which forces the demultiplexer change early and tells us whether the socket can be shared at all. Excluded by design and named as such: the autoNAT sidecar, the byzantine analysis, the weighted prevalence estimate and the decision-rule fit.');
 }
 
 // ============================================================ 10 · open decisions (dark)
@@ -392,7 +392,7 @@ function card(s, o) {
 
   const qs = [
     ['Primary claim', 'The algorithm or the measurement, not both.'],
-    ['autoNAT baseline', 'An Android-only sidecar, or our own reimplementation.'],
+    ['UDX fork', 'The guard cannot see UDX\u2019s own sends. Patch the fork, or report the residual.'],
     ['Reference server', 'Who provisions it, and from which address block.'],
     ['Testbed budget', 'Each SIM covers one carrier, APN and plan.'],
   ];

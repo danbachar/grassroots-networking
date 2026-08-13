@@ -197,9 +197,10 @@ is not an orthogonal attribute.
 
 We note that autoNAT does not produce this measurand. Version 1 reports whether a node is publicly
 reachable, and version 2 reports whether a given address is dialable, with a nonce in the dial-back
-request~\cite{autonat}; neither emits a mapping or filtering label. The comparison against autoNAT is
-therefore restricted to reachability, and the ground truth for classification is an RFC 5780 reference
-server that we operate ourselves.
+request~\cite{autonat}; neither emits a mapping or filtering label. The categorization is therefore
+ours to implement and not to import: the dial-back idea is taken from autoNAT, but the classifier that
+turns a set of dial-back outcomes into a mapping and filtering label is part of the delivered code.
+Ground truth for it is an RFC 5780 reference server that we operate ourselves.
 
 \section{Approach}
 \label{sec:approach}
@@ -397,7 +398,7 @@ reference server, or multipath.
 
 \paragraph{Question.} Does the witness-based algorithm recover the mapping and filtering behavior of
 a NAT whose configuration is known by construction, and how does its agreement compare with that of an
-RFC 5780 reference server and of autoNAT?
+RFC 5780 reference server?
 
 \paragraph{Setup.} A reference server with two public addresses and two ports per family, verified to
 advertise its alternate address and to honour change requests from it. Netfilter spans two of the
@@ -408,8 +409,8 @@ constructed with per-destination source NAT through nftables maps; \code{--persi
 source address pool and is not on this axis. The bench additionally spans EIF, ADF and APDF filtering,
 two to three commercial routers, and a double-NAT configuration emulating CGNAT.
 
-\paragraph{Procedure.} Each configuration is measured by the reference server, by the witness-based
-algorithm with three honest witnesses, and by autoNAT v1 and v2, back to back within one window. The
+\paragraph{Procedure.} Each configuration is measured by the reference server and by the
+witness-based algorithm with three honest witnesses, back to back within one window. The
 contamination guard is then disabled and the filtering arm repeated with a punch issued towards the
 witness beforehand, to quantify the bias it prevents.
 
@@ -473,9 +474,10 @@ prevalence estimate with the four-arm sensitivity analysis of Section~\ref{sec:p
   \item The detection algorithm: a specification with its stated assumptions and failure semantics, a
         reference implementation
         in \code{grassroots\_networking}, and its validation against the RFC 5780 implementation.
-  \item A reachability comparison against autoNAT v1 and v2, measured on one device, network and
-        window. The comparison is Android-only, as embedding the reference implementation on iOS is a
-        project of its own, and we state this as a limitation.
+  \item The classifier itself, as delivered code: the rule that turns a set of dial-back outcomes,
+        each from a friend at a known vantage point, into a mapping and filtering label together with
+        the confidence in it. A specification-level comparison against autoNAT states what each
+        protocol reports and its cost in bytes and round trips per verdict.
   \item The testbed dataset: every bench configuration with its construction label and every stratum
         with its measured tuple, released in full, as these are our own devices on our own SIMs. We
         check the acceptable-use terms of each plan beforehand, as consumer terms occasionally
@@ -497,73 +499,101 @@ large number of traversal attempts~\cite{dcutr}, against which our defensible ax
 carriers and CGNAT observed from real handsets and the decentralization of the witness set, must be
 positioned from the outset.
 
-\section{Milestones}
-\label{sec:milestones}
+\section{Plan}
+\label{sec:plan}
+
+The project is a one-semester praktikum, on the order of three hundred hours, and the plan below is
+sized for that rather than for a thesis. The scope is the algorithm and its validation; the prevalence
+estimate of Section~\ref{sec:prevalence} is what a follow-on thesis would add, and is described here
+so that the semester's work is built to serve it.
 
 {\footnotesize
-\begin{longtable}{L{1.5cm} L{6.2cm} L{7.3cm}}
+\begin{longtable}{L{1.7cm} L{6.1cm} L{7.0cm}}
 \toprule
 \rowcolor{headerblue}
-\textcolor{white}{\textbf{Window}} & \textcolor{white}{\textbf{Work}} &
+\textcolor{white}{\textbf{Weeks}} & \textcolor{white}{\textbf{Work}} &
 \textcolor{white}{\textbf{Exit criterion}} \\
 \midrule
 \endhead
-Month 1 & Scope, measurand, aggregation rule and failure semantics, related work, stratum design and
-testbed inventory. & A design document containing the mapping from each test to the witness topology
-it requires, the aggregation rule with its retry policy, the stratum definition with its weight sources
-named, and an inventory of every handset, SIM, router and access network required, marking what is
-available and what must be procured. \\
+1--3 & Onboarding: the transport, Dart, RFC 4787 and 5780. A STUN client in Dart, sending from the
+transport's own socket, which requires routing on the STUN magic cookie before the 50-byte discard in
+\code{\_handleRawPacket}. & A reflexive address obtained from a public STUN server over the
+transport's socket, with the demultiplexer change reviewed as production code. This is the
+\textbf{go/no-go checkpoint}: if the socket cannot be shared, the project continues on a separate
+socket and reports the mapping-divergence caveat. \\
 \rowcolor{rowgray}
-Month 2 & Reference server on two addresses and two ports; the labeled bench, including the
-address-dependent mapping case that netfilter cannot produce. & One command measures at least eight
-configurations and emits a confusion matrix, with all three mapping classes present; agreement with
-the construction labels of at least 95\%, each disagreement explained; the bench reproduces from a
-clean checkout. \\
-Month 3 & The detection algorithm: friend dial-back, filtering test, contamination guard,
-anti-amplification defenses, multi-witness aggregation. & At least 90\% agreement with the reference
-server across the bench configurations with three honest witnesses; tests showing that a witness can
-neither flip a verdict by claiming a dial it did not perform nor induce a dial towards a third party,
-and that a dial-back from a contacted endpoint is discarded; and the measured effect of the
-contamination guard. \\
+4--6 & The oracle and the bench. Deploy coturn on two addresses and two ports; build four to six
+netfilter and nftables configurations spanning the mapping and filtering axes, each labeled by
+construction. & One command runs the oracle against every configuration and emits a confusion matrix
+against the construction labels, with each disagreement explained in writing. The bench and its
+config-to-label mapping reproduce from a clean checkout. \\
+7--10 & The witness protocol: the signaling types, the nonce, retention of every reflection, the send
+history, and the retry and timeout policy. & On the bench, with three friend witnesses, the mapping
+and filtering labels are recovered and reported against the construction labels. Tests demonstrate
+that a dial-back from a contacted endpoint is discarded, that a dial-back is sent only to the observed
+source, and that an unverified packet is not accepted as a dial-back. The contamination effect is
+measured by repeating one arm with the guard disabled. \\
 \rowcolor{rowgray}
-Month 4 & The autoNAT baseline and the comparison harness; the sweep over witness count and retry
-policy against injected loss. & One record per device, network and window carrying all verdicts with
-latency, bytes and battery; wrong and inconclusive verdict rates against $k$ for each loss rate; and
-the parametric availability curve. \\
-Month 5 & The testbed campaign across all strata, including lifetime probes, roaming and handover. &
-Every stratum characterized with its full tuple and its homogeneity check, each measured on at least
-two days; unreached strata listed with their weight. \\
-\rowcolor{rowgray}
-Month 6 & Prevalence estimation with sensitivity analysis; the decision rule; the address-exposure
-comparison; writing and submission. & Prevalence with weight table, denominator and date, the dominant
-sensitivity envelope named, and no interval presented as a confidence interval; the decision rule as a
-predicate table validated on a held-out split, with the time saved against the current fixed punch and
-timeout; the daily count of distinct peers learning a device's address under the witness-based and
-server-based designs; and one script regenerating every figure. \\
+11--13 & Measurement on our own devices, across the networks we can reach: home, university, and one
+or two carriers. & Every network characterized with the full tuple and the translation path, each
+measured on at least two days, with agreement against the oracle reported and every disagreement
+categorized. Networks that could not be reached are listed with the reason. \\
+14--15 & Write-up and artifact. & A report stating the method, the results and the limitations, and
+one script that regenerates every figure from the recorded data. \\
 \bottomrule
 \end{longtable}
 }
 
-Procurement of addresses and firewall rules for the reference server begins in the first week, as it
-gates the second month.
+Procurement is the one dependency that cannot be compressed: the two addresses and the firewall rules
+for the oracle, and any SIMs, are ordered in week~1. If the oracle is not available by week~4, the
+bench proceeds against a public RFC 5780 server and the comparison is repeated later.
+
+\subsection{What this deliberately excludes}
+
+Three items that belong to the research question are outside a semester and are named here so that
+their absence is a decision and not an oversight. The \textbf{autoNAT sidecar} is removed: the
+comparison is specification-level only, since embedding the reference implementation is a project of
+its own, and since running it against public dial-back nodes would contradict both the friends-only
+rule of Section~\ref{sec:approach} and the rule that measurement traffic stays inside the testbed. The \textbf{prevalence estimate} and its weighting and sensitivity
+analysis are follow-on work; this semester produces the per-stratum measurements it would consume.
+And the \textbf{decision rule} for the transport is left to that follow-on, as fitting it needs more
+networks than a semester will reach.
+
+\subsection{What counts as success}
+
+The project succeeds if the work is done properly and reported honestly, and not if a particular
+number comes out. Concretely: the probe is implemented and sends from the transport's own socket, or
+the reason it cannot is documented; the bench is reproducible and its labels are known by
+construction; the witness algorithm's agreement with the oracle is measured and every disagreement is
+explained; the contamination guard's effect is quantified; and the limitations are stated. A result in
+which the witness approach agrees poorly with the oracle is a finding, and is written up as one --- it
+would tell us that friends are not a sufficient substitute for designated servers, which is precisely
+what the project set out to determine.
+
+Excellent work is distinguished by what it adds beyond that: a characterization of \emph{why} the
+disagreements occur, a retry and timeout policy derived from measured loss rather than assumed, or
+coverage of a carrier whose behavior was not anticipated.
 
 \section{Prerequisites and open decisions}
 
 We expect basic mobile application development, basic networking, and familiarity with statistics and
-a plotting library; experience with a peer-to-peer stack is an advantage. Dart and Flutter can be
-learned during the first month, whereas the networking intuition is harder to acquire on the way.
+a plotting library; experience with a peer-to-peer stack is an advantage. Dart is learned in the first
+weeks, and the onboarding checkpoint exists to make that concrete rather than assumed. The student
+needs a Linux host for the bench, two publicly routable addresses for the oracle, at least one Android
+and one iOS handset, and any SIMs the measurement is to cover.
 
-Four decisions are taken before the work begins. First, whether the autoNAT baseline is the reference
-implementation integrated as a sidecar, which is faithful but Android-only, or a reimplementation over
-our own socket, which is comparable as a probe but makes the baseline our own protocol. Second,
-whether the primary claim is the algorithm or the measurement, as both cannot be first-class within
-six months. Third, who provisions the reference server, and whether its alternate addresses can be
-drawn from the address block already reserved on the existing virtual machine. Fourth, whether to open an IPv4 rule on the
-deployed rendezvous anchor, whose data-plane rule today admits \code{udp:9516} from \code{::/0} and
-is therefore IPv6 only, which excludes the IPv4-only CGNAT population the study targets. Finally, the
-testbed budget: each carrier is a candidate stratum, but each SIM covers only one combination of
-carrier, APN and plan, and at least two such combinations and two handset stacks per carrier are
-required before homogeneity can be checked instead of assumed.
+Five decisions are taken before the work begins. First, ownership of the UDX fork: the send history
+behind the contamination guard cannot see UDX's own retransmissions and keepalives, as the fork
+exposes a receive hook but no general send hook, so either the student is given a path override and
+the right to publish a patched fork, or the guard is defined over the sends the application controls
+and the residual is reported as a limitation. Second, whether the probe shares the transport socket,
+which the week-3 checkpoint answers, and what is reported if it cannot. Third, who provisions the
+oracle's two addresses and firewall rules, and whether they can come from the block already reserved
+on the existing virtual machine. Fourth, whether to open an IPv4 rule on the deployed rendezvous
+anchor, whose data-plane rule today admits \code{udp:9516} from \code{::/0} and is therefore IPv6
+only, which excludes the IPv4-only CGNAT population the study targets. Fifth, the measurement budget:
+each carrier is a candidate stratum, but each SIM covers only one combination of carrier, APN and
+plan.
 
 We note separately that the unvalidated punch target, the absence of rate limiting on the signaling
 path, the uncorroborated address reflection and the unbounded length field in the stream framer are
