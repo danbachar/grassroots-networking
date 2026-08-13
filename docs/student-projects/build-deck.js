@@ -259,7 +259,48 @@ function card(s, o) {
   s.addNotes('Reflections from friends at distinct addresses give mapping behavior. Filtering follows from where the dial-backs come from, classified against our own send history: a friend we have a session with, the same friend on a fresh source port, and a friend we have never transmitted to. No friend is ever asked to dial anyone but us, so there is no amplification vector and no relaying for non-friends, which the signaling design forbids anyway.');
 }
 
-// ============================================================ 6 · validity threats
+// ============================================================ 6 · the algorithm
+{
+  const s = p.addSlide();
+  title(s, 'The procedure', 'Two rounds', false);
+
+  const half = (x, w, head, sub, rows, color) => {
+    s.addText(head, { x, y: 2.15, w, h: 0.35, margin: 0, fontFace: HEAD, fontSize: 19, bold: true, color: INK });
+    s.addText(sub, { x, y: 2.52, w, h: 0.3, margin: 0, fontFace: BODY, fontSize: 12.5, italic: true, color: MUTED });
+    rows.forEach(([obs, label], i) => {
+      const y = 3.05 + i * 0.92;
+      if (i % 2 === 0) card(s, { x: x - 0.15, y: y - 0.08, w: w + 0.3, h: 0.86, fill: 'F6F9F9' });
+      s.addText(obs, {
+        x, y, w: w * 0.56, h: 0.7, margin: 0,
+        fontFace: BODY, fontSize: 13, color: '3E4C57', valign: 'middle',
+      });
+      s.addText(label, {
+        x: x + w * 0.58, y, w: w * 0.42, h: 0.7, margin: 0,
+        fontFace: HEAD, fontSize: 13, bold: true, color, valign: 'middle',
+      });
+    });
+  };
+
+  half(M, 5.5, 'Reflect', 'each friend reports the source it observed', [
+    ['Same tuple from every friend', 'endpoint-independent'],
+    ['Differs by friend address', 'address-dependent'],
+    ['Differs across two ports of one friend', 'address-and-port-dependent'],
+  ], TEAL);
+
+  half(M + 6.3, 5.5, 'Dial back', 'three sources, each carrying the nonce', [
+    ['Arrives from an uncontacted address', 'endpoint-independent'],
+    ['Only from a contacted address, new port', 'address-dependent'],
+    ['Only from the contacted endpoint', 'address-and-port-dependent'],
+  ], AMBER);
+
+  s.addText('Three friends with the right vantage points separate every class. More buy confidence against loss, not resolution.', {
+    x: M, y: 6.2, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 14.5, italic: true, color: TEAL_DK,
+  });
+
+  s.addNotes('Left column is mapping, right is filtering. An arrival is definitive and ends that arm; an absence is retried before it is recorded, because under honest peers an absent dial-back is equally consistent with filtering and with loss. The minimum witness set is combinatorial: two friends at distinct addresses separate endpoint-independent from address-dependent mapping, one friend reachable on two ports separates address-and-port-dependent, and one friend never transmitted to gives the endpoint-independent filtering test. The measurand and the procedure are RFC 4787 and 5780; the dial-back is from autoNAT, which is a libp2p spec and not an RFC; the friends are ours.');
+}
+
+// ============================================================ 7 · validity threats
 {
   const s = p.addSlide();
   title(s, 'Two things that mislead', 'Under honest peers', false);
@@ -289,7 +330,7 @@ function card(s, o) {
   s.addNotes('Contamination is the one that would quietly invalidate a field campaign: it biases in the direction that looks like good news. We publish the label difference between contaminated and clean runs as a result in its own right. The nonce survives the honesty assumption for a different reason: the peers are honest but the network is not, and an off-path party could otherwise inject something resembling a dial-back. Disagreement between witnesses is diagnostic here, not malicious: it usually means the behavior genuinely depends on the source address or port.');
 }
 
-// ============================================================ 7 · validation
+// ============================================================ 8 · validation
 {
   const s = p.addSlide();
   title(s, 'Validation in two tiers', 'How the claim is established', false);
@@ -330,7 +371,7 @@ function card(s, o) {
   s.addNotes('The correctness claim rests on the bench, where labels are known by construction. The reference server needs two public addresses and two ports per family. Default masquerade reads endpoint-independent and --random-fully reads address-and-port-dependent, so the middle class comes from per-destination SNAT via nftables maps. The autoNAT cross-check runs as a standalone client on the same network, so it characterizes the network rather than our socket, and it is Wi-Fi only: on cellular it would need tethering, which adds another translation layer.');
 }
 
-// ============================================================ 8 · testbed and strata
+// ============================================================ 9 · testbed and strata
 {
   const s = p.addSlide();
   title(s, 'The testbed', 'What prevalence costs', false);
@@ -351,7 +392,7 @@ function card(s, o) {
   s.addNotes('Each SIM buys one carrier-APN-plan cell, not a whole carrier, so budget roughly double the naive count. A residual stratum — tethering, VPN and private relay, fixed wireless, enterprise — is carried unmeasured at its best available weight, which is what lets the weight table sum to the denominator.');
 }
 
-// ============================================================ 9 · plan
+// ============================================================ 10 · plan
 {
   const s = p.addSlide();
   title(s, 'One semester', 'Sequence', false);
@@ -384,7 +425,7 @@ function card(s, o) {
   s.addNotes('Every phase carries an exit criterion in the written brief. The week-3 checkpoint is code rather than a document: a reflexive address obtained over the transport\u2019s own socket, which forces the demultiplexer change early and tells us whether the socket can be shared at all. Excluded by design and named as such: the autoNAT sidecar, the byzantine analysis, the weighted prevalence estimate and the decision-rule fit.');
 }
 
-// ============================================================ 10 · open decisions (dark)
+// ============================================================ 11 · open decisions (dark)
 {
   const s = p.addSlide();
   s.background = { color: INK };

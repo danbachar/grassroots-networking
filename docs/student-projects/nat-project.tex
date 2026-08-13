@@ -162,8 +162,10 @@ RFC 5780 reference implementation.
 
 \textbf{RQ2}: what does decentralization cost? Under the honesty assumption of
 Section~\ref{sec:assumption} the cost is statistical and not adversarial, and takes three forms. How
-many witnesses does a confident verdict require, given that a dial-back may fail to arrive for reasons
-unrelated to our NAT? What does disagreement between witnesses at different vantage points indicate,
+many witnesses does a confident verdict require? The minimum set is fixed by the test matrix of
+Section~\ref{sec:algorithm} rather than by any accuracy target, so the open question is how many
+repetitions and how many further friends are needed for confidence, given that a dial-back may fail to
+arrive for reasons unrelated to our NAT. What does disagreement between witnesses at different vantage points indicate,
 since under honest peers it is diagnostic rather than malicious? And what is the availability
 constraint, $P(\geq k$ friends online at an uncontacted vantage point$)$, which we expect to dominate
 in practice?
@@ -245,6 +247,12 @@ from a second local port, establish whether the mapped port varies with the dest
 distinct address and to retain each observation as a \code{(reflector, tuple, timestamp)} triple
 instead of overwriting it.
 
+The provenance is worth stating, as it is easily misread. The measurand and the test procedures come
+from RFC 4787 and RFC 5780; the dial-back mechanism comes from autoNAT, which is a libp2p protocol
+specification and not an RFC; and the substitution of friends for designated servers is ours. What the
+student implements is therefore the RFC 5780 procedures with friends supplying the alternate vantage
+points that the RFC expects a dual-homed server to supply.
+
 Filtering behavior follows from where the dial-backs originate, classified against the probe's own
 send history rather than against the identity of the friend. A dial-back from an address and port the
 probe currently has a session with establishes the baseline; one from the same address on a fresh
@@ -254,6 +262,62 @@ third arm is the constraining one, as it requires a friend with which no session
 a second address of a multi-homed friend that the probe has not used. Friends with a stable public
 address are the most valuable witnesses for it, and the number of distinct uncontacted vantage points
 the friend set can present bounds which filtering classes are separable at all.
+
+\subsection{The procedure}
+\label{sec:algorithm}
+
+A run proceeds in two rounds over a chosen set of friends, each of which is recorded with its address,
+its port, and whether the probe has previously transmitted to it.
+
+\emph{Round one, reflection.} Each friend reports the source address and port it observed. Writing
+$R(f)$ for the tuple reported by friend $f$, the mapping label follows from how $R$ varies:
+
+\begin{longtable}{L{7.4cm} L{7.4cm}}
+\toprule
+\rowcolor{headerblue}
+\textcolor{white}{\textbf{Observation}} & \textcolor{white}{\textbf{Mapping label}} \\
+\midrule
+\endhead
+$R$ identical for every friend & endpoint-independent \\
+\rowcolor{rowgray}
+$R$ differs across friends at distinct addresses, but agrees across two ports of one friend &
+address-dependent \\
+$R$ differs across two ports of the same friend & address-and-port-dependent \\
+\bottomrule
+\end{longtable}
+
+\emph{Round two, dial-back.} The probe requests three dial-backs, each carrying the nonce, and
+classifies filtering by which of them arrive. $D_1$ originates from an address and port the probe has
+transmitted to, $D_2$ from that same address on a source port it has not, and $D_3$ from an address it
+has never transmitted to.
+
+\begin{longtable}{L{7.4cm} L{7.4cm}}
+\toprule
+\rowcolor{headerblue}
+\textcolor{white}{\textbf{Arrivals}} & \textcolor{white}{\textbf{Filtering label}} \\
+\midrule
+\endhead
+$D_3$ arrives & endpoint-independent \\
+\rowcolor{rowgray}
+$D_3$ absent, $D_2$ arrives & address-dependent \\
+$D_2$ absent, $D_1$ arrives & address-and-port-dependent \\
+\rowcolor{rowgray}
+$D_1$ absent & inconclusive: retry, then report no path \\
+\bottomrule
+\end{longtable}
+
+An arrival is definitive and terminates its arm. An absence is retried under the policy of
+Section~\ref{sec:aggregation} before it is recorded, since under honest peers an absent dial-back is
+equally consistent with filtering and with loss.
+
+\emph{How many friends this needs.} The answer is combinatorial before it is statistical. Separating
+endpoint-independent from address-dependent mapping requires two friends at distinct addresses;
+separating address-dependent from address-and-port-dependent requires one friend reachable on two
+ports; the endpoint-independent filtering test requires one friend never transmitted to; and the
+remaining filtering distinction requires a contacted friend able to send from a fresh source port.
+Three friends with the right properties therefore suffice to make every class separable, and no number
+of additional friends improves the resolution. What further friends and repetitions buy is confidence
+against loss, which is the subject of Section~\ref{sec:aggregation} and of the second experiment.
 
 \subsection{Contamination}
 \label{sec:contamination}
@@ -293,6 +357,7 @@ binds an arriving packet to the request that solicited it, distinguishing a genu
 from unrelated traffic and from injection by a party that is not a friend.
 
 \subsection{Aggregation and failure semantics}
+\label{sec:aggregation}
 
 Success and failure are not symmetric, and under honest peers the asymmetry follows from packet loss
 and not from deceit. A dial-back that arrives carrying the nonce is definitive: the path exists and
