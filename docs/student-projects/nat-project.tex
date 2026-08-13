@@ -642,6 +642,38 @@ Procurement is the one dependency that cannot be compressed: the two addresses a
 for the oracle, and any SIMs, are ordered in week~1. If the oracle is not available by week~4, the
 bench proceeds against a public RFC 5780 server and the comparison is repeated later.
 
+\subsection{Hosting the fixed infrastructure}
+\label{sec:hosting}
+
+Three components sit outside the handsets, and a university network is a good candidate for all three,
+provided one requirement is met.
+
+The \textbf{oracle} needs two globally routable addresses per family, each reachable on two UDP ports,
+and it must be able to receive unsolicited inbound datagrams on them. This is the requirement that
+decides everything else, as a border firewall that drops unsolicited inbound UDP makes the host
+unusable however many addresses it has. It is worth establishing in week~1 whether such an exception
+can be obtained, and for which ports, because the alternative is a commercial virtual machine with a
+second address purchased.
+
+The \textbf{witnesses} need distinct vantage points rather than capacity. Instances on separate
+subnets give the distinct-address arm of Section~\ref{sec:algorithm}, and a second listening port on
+one of them gives the port arm, so a handful of small hosts on different segments is more valuable
+than one large host.
+
+The \textbf{bench} can be hosted rather than assembled on a desk. Running the netfilter configurations
+inside network namespaces on a single always-on machine makes the topologies reproducible from a
+script, allows nested translation to be built for a double-NAT case, and removes the physical routers
+from the labeled tier, where Section~\ref{sec:experiments} notes they never belonged, since their
+policy is observed rather than known by construction.
+
+One caveat is worth stating plainly, as it inverts the usual intuition. A campus network is an
+excellent place to stand \emph{outside} a NAT and a poor subject to measure, since university
+allocations are typically large enough that wired hosts are publicly addressed and not translated at
+all. The subjects of the measurement remain the handsets on carrier and residential paths; what the
+institution supplies is the vantage points they are measured against. Campus wireless, the guest
+network and the institutional VPN are separate matters, as each is a genuine access network with its
+own policy and each is worth characterizing in its own right.
+
 \subsection{What this deliberately excludes}
 
 Three items that belong to the research question are outside a semester and are named here so that
@@ -681,9 +713,8 @@ behind the contamination guard cannot see UDX's own retransmissions and keepaliv
 exposes a receive hook but no general send hook, so either the student is given a path override and
 the right to publish a patched fork, or the guard is defined over the sends the application controls
 and the residual is reported as a limitation. Second, whether the probe shares the transport socket,
-which the week-3 checkpoint answers, and what is reported if it cannot. Third, who provisions the
-oracle's two addresses and firewall rules, and whether they can come from the block already reserved
-on the existing virtual machine. Fourth, whether to open an IPv4 rule on the deployed rendezvous
+which the week-3 checkpoint answers, and what is reported if it cannot. Third, who hosts the fixed infrastructure. It has
+three roles and one hard requirement, set out in Section~\ref{sec:hosting}. Fourth, whether to open an IPv4 rule on the deployed rendezvous
 anchor, whose data-plane rule today admits \code{udp:9516} from \code{::/0} and is therefore IPv6
 only, which excludes the IPv4-only CGNAT population the study targets. Fifth, the measurement budget:
 each carrier is a candidate stratum, but each SIM covers only one combination of carrier, APN and
