@@ -330,79 +330,45 @@ function card(s, o) {
   s.addNotes('Contamination is the one that would quietly invalidate a field campaign: it biases in the direction that looks like good news. We publish the label difference between contaminated and clean runs as a result in its own right. The nonce survives the honesty assumption for a different reason: the peers are honest but the network is not, and an off-path party could otherwise inject something resembling a dial-back. Disagreement between witnesses is diagnostic here, not malicious: it usually means the behavior genuinely depends on the source address or port.');
 }
 
-// ============================================================ 8 · validation
+// ============================================================ 8 · testbed and hosting
 {
   const s = p.addSlide();
-  title(s, 'Validation in two tiers', 'How the claim is established', false);
+  title(s, 'Testbed and hosting', 'What we measure, and from where', false);
 
-  const rows = [
-    ['Bench', 'Eight-plus configurations, labeled by construction', 'accuracy is legitimate here', TEAL],
-    ['Sweep', 'Witness count k against byzantine fraction f', 'we operate every witness', TEAL],
-    ['Campaign', 'Our own handsets and SIMs across every stratum', 'agreement, never accuracy', AMBER],
-  ];
-  rows.forEach(([label, what, note, color], i) => {
-    const y = 2.5 + i * 1.25;
-    card(s, { x: M, y, w: CW, h: 1.05 });
-    s.addShape(p.ShapeType.roundRect, {
-      x: M + 0.3, y: y + 0.25, w: 1.9, h: 0.55, rectRadius: 0.05,
-      fill: { color }, line: { color, width: 0 },
-    });
-    s.addText(label, {
-      x: M + 0.3, y: y + 0.25, w: 1.9, h: 0.55, margin: 0,
-      fontFace: HEAD, fontSize: 15, bold: true, color: WHITE, align: 'center', valign: 'middle',
-    });
-    s.addText(what, {
-      x: M + 2.5, y, w: 6.4, h: 1.05, margin: 0,
-      fontFace: BODY, fontSize: 16, color: '3E4C57', valign: 'middle',
-    });
-    s.addText(note, {
-      x: M + 9.0, y, w: 2.6, h: 1.05, margin: 0,
-      fontFace: BODY, fontSize: 13, italic: true, color: MUTED, valign: 'middle', align: 'right',
-    });
-  });
-
-  s.addText('Address-dependent mapping is built deliberately; no netfilter flag produces it.', {
-    x: M, y: 6.15, w: CW, h: 0.35, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
-  });
-  s.addText('Friends carry the method; public autoNAT nodes are a spot check on reachability only.', {
-    x: M, y: 6.55, w: CW, h: 0.35, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
-  });
-
-  s.addNotes('The correctness claim rests on the bench, where labels are known by construction. The reference server needs two public addresses and two ports per family. Default masquerade reads endpoint-independent and --random-fully reads address-and-port-dependent, so the middle class comes from per-destination SNAT via nftables maps. The autoNAT cross-check runs as a standalone client on the same network, so it characterizes the network rather than our socket, and it is Wi-Fi only: on cellular it would need tethering, which adds another translation layer.');
-}
-
-// ============================================================ 9 · testbed and strata
-{
-  const s = p.addSlide();
-  title(s, 'The testbed', 'What prevalence costs', false);
-
+  card(s, { x: M, y: 2.3, w: 5.7, h: 3.0 });
+  s.addText('What we measure', { x: M + 0.4, y: 2.6, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 19, bold: true, color: INK });
   lines(s, [
-    'NAT behavior is a property of the path, not the subscriber.',
-    'A stratum is one carrier, APN and PDN type; or one ISP and CGNAT status.',
-    'Two SIMs and two handset stacks per carrier, before assuming homogeneity.',
-    'Weights from published subscriber counts, never announced address space.',
-  ], { y: 2.5, size: 17, step: 0.62 });
+    'Our own handsets, on carrier and home paths.',
+    'A stratum: one carrier, APN and PDN type.',
+    'Two SIMs and two handset stacks per carrier.',
+  ], { x: M + 0.4, w: 4.9, y: 3.2, size: 13.5, step: 0.52 });
 
-  card(s, { x: M, y: 5.35, w: CW, h: 1.0, fill: 'E7F1F1' });
-  s.addText([
-    { text: 'A census of strata, not a sample:  ', options: { bold: true, color: TEAL_DK } },
-    { text: 'there is no probabilistic sampling within a stratum, so we report sensitivity ranges and never confidence intervals.', options: { color: '3E4C57' } },
-  ], { x: M + 0.4, y: 5.55, w: CW - 0.8, h: 0.6, margin: 0, fontFace: BODY, fontSize: 14.5, lineSpacingMultiple: 1.05 });
+  card(s, { x: M + 6.1, y: 2.3, w: 5.7, h: 3.0 });
+  s.addText('What the institution hosts', { x: M + 6.5, y: 2.6, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 19, bold: true, color: INK });
+  lines(s, [
+    'Oracle: two addresses, two ports, inbound UDP.',
+    'Witnesses: small hosts on separate subnets.',
+    'Bench: netfilter inside network namespaces.',
+  ], { x: M + 6.5, w: 4.9, y: 3.2, size: 13.5, step: 0.52, dot: AMBER });
 
-  s.addNotes('Each SIM buys one carrier-APN-plan cell, not a whole carrier, so budget roughly double the naive count. A residual stratum — tethering, VPN and private relay, fixed wireless, enterprise — is carried unmeasured at its best available weight, which is what lets the weight table sum to the denominator.');
+  s.addText('A campus is a good place to stand outside a NAT and a poor subject to measure.', {
+    x: M, y: 5.7, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
+  });
+
+  s.addNotes('The requirement that decides whether a host can serve is whether it may receive unsolicited inbound UDP on those ports; a border firewall that drops them makes the host unusable however many addresses it has, so it is a week-one question for IT. University wired hosts are usually publicly addressed rather than translated, which is why the campus supplies the vantage points while the handsets remain the subjects. Campus wireless, guest and VPN are separate access networks, worth characterizing on their own terms.');
 }
 
-// ============================================================ 10 · plan
+// ============================================================ 9 · plan
 {
   const s = p.addSlide();
   title(s, 'One semester', 'Sequence', false);
 
   const phases = [
-    ['Weeks 1–3', 'Onboarding; a STUN client on the transport\u2019s own socket. Go/no-go.', TEAL],
-    ['Weeks 4–10', 'The oracle and labeled bench; then the witness protocol and its classifier.', TEAL],
-    ['Weeks 11–15', 'Measurement on our own devices across reachable networks; write-up.', AMBER],
+    ['Weeks 1\u20133', 'Onboarding; a STUN client on the transport\u2019s own socket.', 'go/no-go checkpoint', TEAL],
+    ['Weeks 4\u201310', 'The oracle and labeled bench; then the protocol and its classifier.', 'labels known by construction', TEAL],
+    ['Weeks 11\u201315', 'Measurement across the networks we can reach; write-up.', 'agreement, never accuracy', AMBER],
   ];
-  phases.forEach(([when, what, color], i) => {
+  phases.forEach(([when, what, note, color], i) => {
     const y = 2.6 + i * 1.3;
     s.addShape(p.ShapeType.roundRect, {
       x: M, y, w: 2.5, h: 1.0, rectRadius: 0.06,
@@ -413,19 +379,26 @@ function card(s, o) {
       fontFace: HEAD, fontSize: 16, bold: true, color: WHITE, align: 'center', valign: 'middle',
     });
     s.addText(what, {
-      x: M + 2.9, y, w: CW - 2.9, h: 1.0, margin: 0,
-      fontFace: BODY, fontSize: 16.5, color: '3E4C57', valign: 'middle',
+      x: M + 2.9, y, w: 6.2, h: 1.0, margin: 0,
+      fontFace: BODY, fontSize: 16, color: '3E4C57', valign: 'middle',
+    });
+    s.addText(note, {
+      x: M + 9.3, y, w: CW - 9.3, h: 1.0, margin: 0,
+      fontFace: BODY, fontSize: 13, italic: true, color: MUTED, valign: 'middle', align: 'right',
     });
   });
 
-  s.addText('Week one: two public addresses, firewall rules, SIMs and handsets. They gate week four.', {
-    x: M, y: 6.35, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: AMBER,
+  s.addText('Address-dependent mapping is built deliberately; no netfilter flag produces it.', {
+    x: M, y: 6.42, w: CW, h: 0.32, margin: 0, fontFace: BODY, fontSize: 14, italic: true, color: TEAL_DK,
+  });
+  s.addText('Week one: addresses, firewall rules, SIMs and handsets. They gate week four.', {
+    x: M, y: 6.78, w: CW, h: 0.32, margin: 0, fontFace: BODY, fontSize: 14, italic: true, color: AMBER,
   });
 
   s.addNotes('Every phase carries an exit criterion in the written brief. The week-3 checkpoint is code rather than a document: a reflexive address obtained over the transport\u2019s own socket, which forces the demultiplexer change early and tells us whether the socket can be shared at all. Excluded by design and named as such: the autoNAT sidecar, the byzantine analysis, the weighted prevalence estimate and the decision-rule fit.');
 }
 
-// ============================================================ 11 · open decisions (dark)
+// ============================================================ 10 · open decisions (dark)
 {
   const s = p.addSlide();
   s.background = { color: INK };
@@ -434,7 +407,7 @@ function card(s, o) {
   const qs = [
     ['Primary claim', 'The algorithm or the measurement, not both.'],
     ['UDX fork', 'The guard cannot see UDX\u2019s own sends. Patch the fork, or report the residual.'],
-    ['Reference server', 'Who provisions it, and from which address block.'],
+    ['Inbound UDP', 'May the host receive unsolicited datagrams on two addresses, two ports?'],
     ['Testbed budget', 'Each SIM covers one carrier, APN and plan.'],
   ];
   qs.forEach(([h, b], i) => {
