@@ -160,12 +160,13 @@ succeeds, nothing is learned either.
 algorithm that recovers a peer's mapping and filtering behavior, and quantify its agreement with an
 RFC 5780 reference implementation.
 
-\textbf{RQ2}: what does decentralization cost? We measure how the false-negative rate and the
-time-to-verdict vary with the witness count $k$ and the byzantine fraction $f$, for both colluding and
-independent adversaries, and determine whether the gap to a designated-server baseline closes as $k$
-grows. We also evaluate the availability constraint, $P(\geq k$ friends online at an uncontacted vantage
-point$)$,
-which we expect to dominate the accuracy question in practice.
+\textbf{RQ2}: what does decentralization cost? Under the honesty assumption of
+Section~\ref{sec:assumption} the cost is statistical and not adversarial, and takes three forms. How
+many witnesses does a confident verdict require, given that a dial-back may fail to arrive for reasons
+unrelated to our NAT? What does disagreement between witnesses at different vantage points indicate,
+since under honest peers it is diagnostic rather than malicious? And what is the availability
+constraint, $P(\geq k$ friends online at an uncontacted vantage point$)$, which we expect to dominate
+in practice?
 
 \textbf{RQ3}: which NAT behaviors occur in the networks our users inhabit, and how prevalent are
 they? We measure the tuple of Section~\ref{sec:measurand} per stratum on our own devices, and estimate
@@ -271,30 +272,52 @@ availability question sharper: what matters is not how many friends are online, 
 online at a vantage point the probe has not already used. Running the same test with and without
 a prior punch towards the witness quantifies the bias that naive witness-based tests incur.
 
-\subsection{Aggregation and adversary model}
+\subsection{Assumption: honest peers}
+\label{sec:assumption}
 
-A dial-back carrying a client-chosen nonce cannot be forged, so a single honest witness is sufficient
-to prove reachability, whereas a claimed failure can be fabricated or withheld at no cost. The
-aggregation rule is therefore asymmetric: any verified success establishes reachability, and
-unreachability is declared only after $k$ independent witnesses have failed, as a symmetric majority
-vote would treat a fabricated failure as evidence.
+We assume throughout that peers are honest: a friend that reports a dial-back performed it, and a
+friend that reports a failure observed one. This is a stated assumption and not a claim about the
+deployment, and relaxing it --- witnesses that fabricate successes, withhold them, or collude --- is a
+natural extension of this work and not part of it. Two consequences are worth separating, as only one
+of them disappears under the assumption.
 
-We define the adversary by its byzantine fraction, whether its members collude, and whether it is
-on-path or off-path, and implement three defenses before the probe runs outside the bench. First, the
-client-chosen nonce is echoed in the dial-back, so that a witness cannot claim a dial it did not
-perform. Second, a dial-back targets only the source address the friend itself observed, and never an
-address carried in the request, so that the protocol cannot be used to direct traffic at a third
-party; this is what the friends-only restriction buys, and it removes the need for the proof-of-cost
-payload that autoNAT v2 requires before an off-path dial. Third, we rate-limit per requester and refuse to
-dial or punch any target that is not globally routable, using the predicate already present in
-\code{address\_utils.dart} but not applied on the punch path, and require two independent witnesses to
-agree before the stored public address is modified. Without these, a witness protocol layered on the
-current code would be weaker than autoNAT v1, which refused to dial any address other than the
-requester's observed source.
+What disappears is the need to defend against a lying witness, and with it the byzantine analysis. No
+quorum is required to establish that a dial-back happened, and a reported failure can be taken at face
+value as that witness's own observation.
 
-All measurement traffic is confined to the testbed by a target allowlist enforced at the send path, so
-that a witness-supplied address cannot cause a probe or punch towards a third party, and measurement
-is never enabled in the production build.
+What remains is that the network is not honest merely because the peers are. An off-path party can
+still inject a packet resembling a dial-back, and the probe would otherwise conclude that it is
+reachable when it is not. The client-chosen nonce therefore stays, with a different justification: it
+binds an arriving packet to the request that solicited it, distinguishing a genuine dial-back both
+from unrelated traffic and from injection by a party that is not a friend.
+
+\subsection{Aggregation and failure semantics}
+
+Success and failure are not symmetric, and under honest peers the asymmetry follows from packet loss
+and not from deceit. A dial-back that arrives carrying the nonce is definitive: the path exists and
+the NAT admitted it. A dial-back that does not arrive is not definitive, as it is equally consistent
+with the NAT filtering the packet, with the witness being unable to send from the requested source,
+and with ordinary loss on either path.
+
+The aggregation rule follows. Any verified arrival establishes the property under test. An absence is
+recorded as inconclusive until the arm has been retried and attempted through $k$ independent
+witnesses, and only then reported as a negative result. The retry and timeout policy is therefore part
+of the specification and not an implementation detail, and the residual probability that a genuinely
+open path is reported closed is a quantity the evaluation must state.
+
+Disagreement between witnesses is a measurement signal under this model and not a sign of misbehavior.
+Where one vantage point succeeds and another fails, the likely explanation is that the behavior under
+test genuinely depends on the source address or port, which is precisely the distinction between
+endpoint-independent, address-dependent and address-and-port-dependent filtering. Disagreement is
+therefore retained and classified, never voted away.
+
+Two engineering constraints survive the assumption, as they protect parties outside it. A dial-back
+targets only the source address the friend itself observed, and never an address carried in the
+request, so the protocol cannot direct traffic at a third party; this is what the friends-only
+restriction of Section~\ref{sec:approach} buys. And the probe refuses to dial or punch any target that
+is not globally routable, using the predicate already present in \code{address\_utils.dart} but not
+applied on the punch path. All measurement traffic is confined to the testbed by a target allowlist
+enforced at the send path, and measurement is never enabled in the production build.
 
 \subsection{Prevalence estimation}
 \label{sec:prevalence}
@@ -391,33 +414,33 @@ contamination guard is then disabled and the filtering arm repeated with a punch
 witness beforehand, to quantify the bias it prevents.
 
 \paragraph{Measures.} Per-configuration labels from each method against the construction label;
-wall-clock time to verdict; bytes transmitted and received per verdict, including the proof-of-cost
-payload where applicable.
+wall-clock time to verdict; bytes transmitted and received per verdict.
 
 \paragraph{Output.} Confusion matrices against the construction labels for at least eight
 configurations; agreement of the witness-based algorithm with the reference server; and the label
 difference between contaminated and uncontaminated runs.
 
-\subsection{Robustness to dishonest witnesses}
+\subsection{Witness count and failure semantics}
 
-\paragraph{Question.} How do the false-negative rate and the time to verdict degrade as the witness
-count and the fraction of dishonest witnesses vary, and does the asymmetric aggregation rule of
-Section~\ref{sec:approach} behave as intended?
+\paragraph{Question.} How many honest witnesses does a confident verdict require, how much of an
+apparent negative is ordinary loss, and does disagreement between vantage points correspond to genuine
+address- or port-dependence?
 
-\paragraph{Setup.} Witness processes on the bench, a fraction $f$ of which claim dial-backs they did
-not perform, withhold successful ones, or collude on a shared account of events. As we operate them,
-which witness lied is known by construction.
+\paragraph{Setup.} Witness processes on the bench, at distinct addresses and ports, against
+configurations whose filtering behavior is known by construction. Loss is injected on the return path
+at controlled rates.
 
-\paragraph{Procedure.} Sweep the witness count $k$ against $f \in \{0, 0.1, 0.3, 0.5\}$, for
-independent and colluding adversaries. The availability constraint is evaluated parametrically over
-the online fraction and the friend-count distribution, as the testbed supplies no realistic
-distribution of its own.
+\paragraph{Procedure.} Sweep the witness count $k$ and the retry policy against injected loss. For each
+configuration, record whether the verdict is correct, inconclusive or wrong, and compare the pattern of
+witness disagreement against the configuration's known dependence on source address and port.
 
-\paragraph{Measures.} False-negative and false-positive rate per $(k, f)$; time to verdict; number of
-dial-back requests issued per verdict.
+\paragraph{Measures.} Rate of wrong and of inconclusive verdicts per $(k,$ retry policy, loss rate$)$;
+time to verdict; number of dial-back requests per verdict; agreement between vantage points.
 
-\paragraph{Output.} Error rate against $k$ for each $f$, exhibiting the asymmetry of the aggregation
-rule; time to verdict against $k$; and the parametric availability curve $P(\geq k)$.
+\paragraph{Output.} Wrong-verdict and inconclusive rates against $k$ for each loss rate, giving the
+witness count and retry policy at which a verdict becomes trustworthy; the residual probability that an
+open path is reported closed; and a mapping from disagreement patterns onto the filtering classes they
+indicate.
 
 \subsection{Testbed campaign across strata}
 
@@ -447,7 +470,8 @@ prevalence estimate with the four-arm sensitivity analysis of Section~\ref{sec:p
 \label{sec:deliverables}
 
 \begin{itemize}
-  \item The detection algorithm: a specification with its adversary model, a reference implementation
+  \item The detection algorithm: a specification with its stated assumptions and failure semantics, a
+        reference implementation
         in \code{grassroots\_networking}, and its validation against the RFC 5780 implementation.
   \item A reachability comparison against autoNAT v1 and v2, measured on one device, network and
         window. The comparison is Android-only, as embedding the reference implementation on iOS is a
@@ -484,9 +508,9 @@ positioned from the outset.
 \textcolor{white}{\textbf{Exit criterion}} \\
 \midrule
 \endhead
-Month 1 & Scope, measurand, adversary model, aggregation rule, related work, stratum design and
+Month 1 & Scope, measurand, aggregation rule and failure semantics, related work, stratum design and
 testbed inventory. & A design document containing the mapping from each test to the witness topology
-it requires, the adversary model, the aggregation rule, the stratum definition with its weight sources
+it requires, the aggregation rule with its retry policy, the stratum definition with its weight sources
 named, and an inventory of every handset, SIM, router and access network required, marking what is
 available and what must be procured. \\
 \rowcolor{rowgray}
@@ -502,10 +526,10 @@ neither flip a verdict by claiming a dial it did not perform nor induce a dial t
 and that a dial-back from a contacted endpoint is discarded; and the measured effect of the
 contamination guard. \\
 \rowcolor{rowgray}
-Month 4 & The autoNAT baseline and the comparison harness; the sweep over witness count and byzantine
-fraction. & One record per device, network and window carrying all verdicts with latency, bytes and
-battery; error rate and time to verdict against $k$ for each $f$; and the parametric availability
-curve. \\
+Month 4 & The autoNAT baseline and the comparison harness; the sweep over witness count and retry
+policy against injected loss. & One record per device, network and window carrying all verdicts with
+latency, bytes and battery; wrong and inconclusive verdict rates against $k$ for each loss rate; and
+the parametric availability curve. \\
 Month 5 & The testbed campaign across all strata, including lifetime probes, roaming and handover. &
 Every stratum characterized with its full tuple and its homogeneity check, each measured on at least
 two days; unreached strata listed with their weight. \\

@@ -262,7 +262,7 @@ function card(s, o) {
 // ============================================================ 6 · validity threats
 {
   const s = p.addSlide();
-  title(s, 'Two validity threats', 'What could invalidate the result', false);
+  title(s, 'Two things that mislead', 'Under honest peers', false);
 
   card(s, { x: M, y: 2.3, w: 5.7, h: 2.9 });
   s.addShape(p.ShapeType.ellipse, { x: M + 0.4, y: 2.6, w: 0.4, h: 0.4, fill: { color: AMBER }, line: { color: AMBER, width: 0 } });
@@ -275,18 +275,18 @@ function card(s, o) {
 
   card(s, { x: M + 6.1, y: 2.3, w: 5.7, h: 2.9 });
   s.addShape(p.ShapeType.ellipse, { x: M + 6.5, y: 2.6, w: 0.4, h: 0.4, fill: { color: TEAL }, line: { color: TEAL, width: 0 } });
-  s.addText('Dishonest witnesses', { x: M + 6.5, y: 3.15, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 20, bold: true, color: INK });
+  s.addText('Absent dial-backs', { x: M + 6.5, y: 3.15, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 20, bold: true, color: INK });
   lines(s, [
-    'A nonce cannot be forged, but a failure can be fabricated.',
-    'One verified success proves reachability.',
-    'Unreachability needs k independent failures.',
+    'An arriving dial-back is definitive: the path exists.',
+    'An absent one is filtering, or simply loss.',
+    'Negative verdicts need retries and k witnesses.',
   ], { x: M + 6.5, w: 4.9, y: 3.65, size: 13.5, step: 0.42 });
 
-  s.addText('Both are studied on the bench, where we operate every witness and know who lied.', {
+  s.addText('We assume peers are honest. Relaxing that assumption is follow-on work.', {
     x: M, y: 5.6, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
   });
 
-  s.addNotes('Contamination is the one that would quietly invalidate a field campaign: it biases in the direction that looks like good news. We publish the label difference between contaminated and clean runs as a result in its own right. The aggregation asymmetry follows from the nonce being unforgeable while a claimed failure is free.');
+  s.addNotes('Contamination is the one that would quietly invalidate a field campaign: it biases in the direction that looks like good news. We publish the label difference between contaminated and clean runs as a result in its own right. The nonce survives the honesty assumption for a different reason: the peers are honest but the network is not, and an off-path party could otherwise inject something resembling a dial-back. Disagreement between witnesses is diagnostic here, not malicious: it usually means the behavior genuinely depends on the source address or port.');
 }
 
 // ============================================================ 7 · validation
