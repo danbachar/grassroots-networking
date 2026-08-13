@@ -317,8 +317,34 @@ targets only the source address the friend itself observed, and never an address
 request, so the protocol cannot direct traffic at a third party; this is what the friends-only
 restriction of Section~\ref{sec:approach} buys. And the probe refuses to dial or punch any target that
 is not globally routable, using the predicate already present in \code{address\_utils.dart} but not
-applied on the punch path. All measurement traffic is confined to the testbed by a target allowlist
-enforced at the send path, and measurement is never enabled in the production build.
+applied on the punch path. Measurement traffic from the probe is confined to the testbed by a target
+allowlist enforced at the send path, and measurement is never enabled in the production build. The one
+exception is the external cross-check of Section~\ref{sec:crosscheck}, which is run deliberately and
+by hand, from a separate process rather than from the probe.
+
+\subsection{An external cross-check}
+\label{sec:crosscheck}
+
+The classifier consumes dial-backs from friends only. Separately, and clearly labeled as such, we
+query the public libp2p autoNAT nodes as an outside reference on \emph{reachability alone}, so that
+our friends-only verdict is not the only opinion in the record. Three caveats determine how much this
+can be asked to carry.
+
+It answers a narrower question. autoNAT reports whether a node is publicly reachable, and version 2
+whether a given address is dialable; neither yields a mapping or filtering label, so the cross-check
+can corroborate or contradict a reachability verdict and nothing more.
+
+It measures a different socket. Speaking to those nodes requires a libp2p host, and embedding one in
+the application is the cost this project explicitly avoids, so the cross-check runs as a small
+standalone client on a general-purpose host attached to the same network. It therefore characterizes
+the \emph{network} rather than the transport's own socket, and on cellular it can only be run by
+tethering, which inserts a further translation layer and makes the comparison invalid. We run it on
+Wi-Fi networks and state the cellular gap rather than papering over it.
+
+It leaves the testbed. The requests go to public infrastructure that exists to answer them, they are
+protocol-conformant and few, and they are issued by hand rather than by the probe. This is the only
+measurement traffic in the project that is not confined to hardware we control, and it is recorded as
+such.
 
 \subsection{Prevalence estimation}
 \label{sec:prevalence}
@@ -477,7 +503,8 @@ prevalence estimate with the four-arm sensitivity analysis of Section~\ref{sec:p
   \item The classifier itself, as delivered code: the rule that turns a set of dial-back outcomes,
         each from a friend at a known vantage point, into a mapping and filtering label together with
         the confidence in it. A specification-level comparison against autoNAT states what each
-        protocol reports and its cost in bytes and round trips per verdict.
+        protocol reports and its cost in bytes and round trips per verdict, and a spot cross-check
+        against public autoNAT nodes corroborates the reachability verdict on Wi-Fi networks.
   \item The testbed dataset: every bench configuration with its construction label and every stratum
         with its measured tuple, released in full, as these are our own devices on our own SIMs. We
         check the acceptable-use terms of each plan beforehand, as consumer terms occasionally
@@ -535,9 +562,11 @@ source, and that an unverified packet is not accepted as a dial-back. The contam
 measured by repeating one arm with the guard disabled. \\
 \rowcolor{rowgray}
 11--13 & Measurement on our own devices, across the networks we can reach: home, university, and one
-or two carriers. & Every network characterized with the full tuple and the translation path, each
-measured on at least two days, with agreement against the oracle reported and every disagreement
-categorized. Networks that could not be reached are listed with the reason. \\
+or two carriers, plus the standalone autoNAT spot cross-check on the Wi-Fi networks. & Every network
+characterized with the full tuple and the translation path, each measured on at least two days, with
+agreement against the oracle reported and every disagreement categorized. The cross-check is reported
+for the Wi-Fi networks, with the cellular gap stated. Networks that could not be reached are listed
+with the reason. \\
 14--15 & Write-up and artifact. & A report stating the method, the results and the limitations, and
 one script that regenerates every figure from the recorded data. \\
 \bottomrule
@@ -551,10 +580,10 @@ bench proceeds against a public RFC 5780 server and the comparison is repeated l
 \subsection{What this deliberately excludes}
 
 Three items that belong to the research question are outside a semester and are named here so that
-their absence is a decision and not an oversight. The \textbf{autoNAT sidecar} is removed: the
-comparison is specification-level only, since embedding the reference implementation is a project of
-its own, and since running it against public dial-back nodes would contradict both the friends-only
-rule of Section~\ref{sec:approach} and the rule that measurement traffic stays inside the testbed. The \textbf{prevalence estimate} and its weighting and sensitivity
+their absence is a decision and not an oversight. The \textbf{autoNAT sidecar} is removed, as
+embedding the reference implementation in the application is a project of its own; the protocol
+comparison is specification-level, and the external corroboration is the standalone spot cross-check
+of Section~\ref{sec:crosscheck} and not an in-app baseline. The \textbf{prevalence estimate} and its weighting and sensitivity
 analysis are follow-on work; this semester produces the per-stratum measurements it would consume.
 And the \textbf{decision rule} for the transport is left to that follow-on, as fitting it needs more
 networks than a semester will reach.

@@ -323,11 +323,11 @@ function card(s, o) {
   s.addText('Address-dependent mapping is built deliberately; no netfilter flag produces it.', {
     x: M, y: 6.15, w: CW, h: 0.35, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
   });
-  s.addText('autoNAT reports reachability only, so classification is validated against the RFC 5780 server.', {
+  s.addText('Friends carry the method; public autoNAT nodes are a spot check on reachability only.', {
     x: M, y: 6.55, w: CW, h: 0.35, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
   });
 
-  s.addNotes('The correctness claim rests on the bench, where labels are known by construction. The reference server needs two public addresses and two ports per family. Default masquerade reads endpoint-independent and --random-fully reads address-and-port-dependent, so the middle class comes from per-destination SNAT via nftables maps.');
+  s.addNotes('The correctness claim rests on the bench, where labels are known by construction. The reference server needs two public addresses and two ports per family. Default masquerade reads endpoint-independent and --random-fully reads address-and-port-dependent, so the middle class comes from per-destination SNAT via nftables maps. The autoNAT cross-check runs as a standalone client on the same network, so it characterizes the network rather than our socket, and it is Wi-Fi only: on cellular it would need tethering, which adds another translation layer.');
 }
 
 // ============================================================ 8 · testbed and strata
