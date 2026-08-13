@@ -163,7 +163,8 @@ RFC 5780 reference implementation.
 \textbf{RQ2}: what does decentralization cost? We measure how the false-negative rate and the
 time-to-verdict vary with the witness count $k$ and the byzantine fraction $f$, for both colluding and
 independent adversaries, and determine whether the gap to a designated-server baseline closes as $k$
-grows. We also evaluate the availability constraint, $P(\geq k$ witnesses online and dialable$)$,
+grows. We also evaluate the availability constraint, $P(\geq k$ friends online at an uncontacted vantage
+point$)$,
 which we expect to dominate the accuracy question in practice.
 
 \textbf{RQ3}: which NAT behaviors occur in the networks our users inhabit, and how prevalent are
@@ -221,20 +222,36 @@ on which the probe loop is layered, the Noise session manager for the authentica
 signed invite records as the template for a witness attestation, and \code{bootstrap\_anchor/}, which
 runs without Flutter and is therefore the natural host for the reference server.
 
-The two RFC 5780 dimensions are not equally reachable from social witnesses. Mapping behavior
-requires the mapped address to be reflected from at least two witnesses at distinct addresses, plus
-one at a distinct port on one of them; \code{ADDR\_REFLECT} already performs the reflection, and what
-remains is to reflect from a second distinct address and to retain each observation as a
-\code{(reflector, tuple, timestamp)} triple instead of overwriting it. Filtering behavior is the
-harder half, as it requires an inbound packet from an endpoint the probe has never contacted, which no
-single witness can produce for itself. We therefore specify a relayed dial-back, carried on the existing signaling plane inside Noise
-sessions, where clear signaling is refused on both ends and the eleven types in use occupy
-\code{0x05}--\code{0x0f}, so that the witness messages are purely additive from \code{0x10} upwards.
-The probe sends witness $W_1$ a nonce, its own mapped address and the requested source class; $W_1$ instructs a second
-witness $W_2$, which the probe has not contacted, to dial back; and $W_2$ dials the probe carrying the
-nonce, which the probe verifies. Three variants of the dial-back source yield EIF, ADF and APDF
-respectively: an already-contacted port on a contacted address, a new port on a contacted address,
-and an entirely new address.
+Every witness is a friend of the probe, and the probe addresses each of them directly. We considered
+having one friend relay a dial-back request onwards to a further node, and rejected it: signaling in
+GN is friend-only by design, so that a device never acts on behalf of an arbitrary peer, and a request
+that causes a packet to be sent to a third party is precisely the amplification vector autoNAT v1
+refused to create. Restricting witnesses to friends removes that vector by construction, and the
+requests travel on the existing signaling plane inside Noise sessions, where clear signaling is
+refused on both ends and the eleven types in use occupy \code{0x05}--\code{0x0f}, so that the witness
+messages are purely additive from \code{0x10} upwards.
+
+Each friend performs two functions. It \emph{reflects}, by reporting the source address and port it
+observed for the request, and it \emph{dials back} on request, sending the probe a packet carrying the
+client-chosen nonce from a source it names in its reply. The nonce is what makes the report
+unforgeable: a friend cannot claim a dial-back that never arrived, since the probe accepts only a
+packet carrying the value it generated.
+
+Mapping behavior follows from the reflections. Two friends at distinct addresses, plus one reporting
+from a second local port, establish whether the mapped port varies with the destination.
+\code{ADDR\_REFLECT} already performs the reflection; what remains is to solicit it from a second
+distinct address and to retain each observation as a \code{(reflector, tuple, timestamp)} triple
+instead of overwriting it.
+
+Filtering behavior follows from where the dial-backs originate, classified against the probe's own
+send history rather than against the identity of the friend. A dial-back from an address and port the
+probe currently has a session with establishes the baseline; one from the same address on a fresh
+source port separates address-and-port-dependent filtering from the rest; and one from an address the
+probe has never transmitted to separates address-dependent from endpoint-independent filtering. The
+third arm is the constraining one, as it requires a friend with which no session is currently open, or
+a second address of a multi-homed friend that the probe has not used. Friends with a stable public
+address are the most valuable witnesses for it, and the number of distinct uncontacted vantage points
+the friend set can present bounds which filtering classes are separable at all.
 
 \subsection{Contamination}
 \label{sec:contamination}
@@ -247,8 +264,11 @@ measures the probe's own behavior instead of the NAT's filtering rule, biasing r
 permissiveness.
 
 We mitigate this with a per-test send history of every destination emitted on the measured socket: a
-witness source appearing in that history is a logged discard condition, and every dial-back in the
-filtering arm must originate from an endpoint never contacted. Running the same test with and without
+witness source appearing in that history is a logged discard condition, and the strict filtering arm
+must originate from an endpoint never contacted. This constrains witness selection rather than the
+protocol, as the friends currently in session are precisely the contaminated ones, and it makes the
+availability question sharper: what matters is not how many friends are online, but how many are
+online at a vantage point the probe has not already used. Running the same test with and without
 a prior punch towards the witness quantifies the bias that naive witness-based tests incur.
 
 \subsection{Aggregation and adversary model}
@@ -262,9 +282,10 @@ vote would treat a fabricated failure as evidence.
 We define the adversary by its byzantine fraction, whether its members collude, and whether it is
 on-path or off-path, and implement three defenses before the probe runs outside the bench. First, the
 client-chosen nonce is echoed in the dial-back, so that a witness cannot claim a dial it did not
-perform. Second, an off-path dial must target the requester's observed source address or carry a
-proof-of-cost comparable to autoNAT v2's, whose cost in bytes and latency we report, as it is both a
-metered-data consideration and a latency confound. Third, we rate-limit per requester and refuse to
+perform. Second, a dial-back targets only the source address the friend itself observed, and never an
+address carried in the request, so that the protocol cannot be used to direct traffic at a third
+party; this is what the friends-only restriction buys, and it removes the need for the proof-of-cost
+payload that autoNAT v2 requires before an off-path dial. Third, we rate-limit per requester and refuse to
 dial or punch any target that is not globally routable, using the predicate already present in
 \code{address\_utils.dart} but not applied on the punch path, and require two independent witnesses to
 agree before the stored public address is modified. Without these, a witness protocol layered on the
@@ -474,7 +495,7 @@ address-dependent mapping case that netfilter cannot produce. & One command meas
 configurations and emits a confusion matrix, with all three mapping classes present; agreement with
 the construction labels of at least 95\%, each disagreement explained; the bench reproduces from a
 clean checkout. \\
-Month 3 & The detection algorithm: relayed dial-back, filtering test, contamination guard,
+Month 3 & The detection algorithm: friend dial-back, filtering test, contamination guard,
 anti-amplification defenses, multi-witness aggregation. & At least 90\% agreement with the reference
 server across the bench configurations with three honest witnesses; tests showing that a witness can
 neither flip a verdict by claiming a dial it did not perform nor induce a dial towards a third party,

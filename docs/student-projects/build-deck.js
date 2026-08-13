@@ -171,45 +171,48 @@ function card(s, o) {
   const s = p.addSlide();
   title(s, 'Witness-based detection', 'The idea', false);
 
-  const dy = 2.9;
-  const node = (x, label, sub, color) => {
+  // Probe at left; three friends at right, each dialing back from its own vantage point.
+  const px = M + 0.4, py = 3.15;
+  s.addShape(p.ShapeType.roundRect, {
+    x: px, y: py, w: 2.5, h: 1.1, rectRadius: 0.06,
+    fill: { color: PANEL }, line: { color: TEAL, width: 1.4 },
+  });
+  s.addText('Probe', { x: px, y: py + 0.2, w: 2.5, h: 0.36, margin: 0, fontFace: HEAD, fontSize: 17, bold: true, color: INK, align: 'center' });
+  s.addText('the device', { x: px, y: py + 0.58, w: 2.5, h: 0.3, margin: 0, fontFace: BODY, fontSize: 12, color: MUTED, align: 'center' });
+
+  const friends = [
+    ['Friend A', 'session open', TEAL, 2.15],
+    ['Friend B', 'new source port', TEAL, 3.35],
+    ['Friend C', 'never contacted', AMBER, 4.55],
+  ];
+  friends.forEach(([n, sub, color, y]) => {
+    const fx = M + 8.3;
     s.addShape(p.ShapeType.roundRect, {
-      x, y: dy, w: 2.4, h: 1.0, rectRadius: 0.06,
+      x: fx, y, w: 3.3, h: 0.95, rectRadius: 0.06,
       fill: { color: PANEL }, line: { color, width: 1.3 },
     });
-    s.addText(label, { x: x + 0.1, y: dy + 0.18, w: 2.2, h: 0.34, margin: 0, fontFace: HEAD, fontSize: 16, bold: true, color: INK, align: 'center' });
-    s.addText(sub, { x: x + 0.1, y: dy + 0.55, w: 2.2, h: 0.3, margin: 0, fontFace: BODY, fontSize: 11.5, color: MUTED, align: 'center' });
-  };
-  node(M + 0.4, 'Probe', 'the device', TEAL);
-  node(M + 4.6, 'Witness 1', 'a friend', TEAL);
-  node(M + 8.8, 'Witness 2', 'not contacted', AMBER);
-
-  const arrow = (x1, x2, label, color) => {
+    s.addText(n, { x: fx + 0.15, y: y + 0.14, w: 3.0, h: 0.32, margin: 0, fontFace: HEAD, fontSize: 15, bold: true, color: INK });
+    s.addText(sub, { x: fx + 0.15, y: y + 0.48, w: 3.0, h: 0.3, margin: 0, fontFace: BODY, fontSize: 11.5, color });
+    const x1 = px + 2.5, y1 = py + 0.55;      // probe, right edge
+    const x2 = fx, y2 = y + 0.475;            // friend, left edge
     s.addShape(p.ShapeType.line, {
-      x: x1, y: dy + 0.5, w: x2 - x1, h: 0,
-      line: { color, width: 1.5, endArrowType: 'triangle' },
+      x: x1, y: Math.min(y1, y2), w: x2 - x1, h: Math.abs(y2 - y1),
+      line: { color, width: 1.4, beginArrowType: 'triangle' },
+      flipV: y2 < y1,
     });
-    s.addText(label, {
-      x: x1, y: dy + 0.06, w: x2 - x1, h: 0.3, margin: 0,
-      fontFace: BODY, fontSize: 11.5, color, align: 'center',
-    });
-  };
-  arrow(M + 2.9, M + 4.5, 'nonce', TEAL);
-  arrow(M + 7.1, M + 8.7, 'relay', TEAL);
-  s.addShape(p.ShapeType.line, { x: M + 1.6, y: dy + 1.0, w: 0, h: 0.6, line: { color: AMBER, width: 1.5 } });
-  s.addShape(p.ShapeType.line, { x: M + 1.6, y: dy + 1.6, w: 8.4, h: 0, line: { color: AMBER, width: 1.5, beginArrowType: 'triangle' } });
-  s.addShape(p.ShapeType.line, { x: M + 10.0, y: dy + 1.0, w: 0, h: 0.6, line: { color: AMBER, width: 1.5 } });
-  s.addText('dial-back carrying the nonce', {
-    x: M + 1.6, y: dy + 1.65, w: 8.4, h: 0.3, margin: 0,
-    fontFace: BODY, fontSize: 12, color: AMBER, align: 'center',
+  });
+  s.addText('each dial-back carries the nonce', {
+    x: px, y: py + 1.3, w: 2.5, h: 0.3, margin: 0,
+    fontFace: BODY, fontSize: 11.5, color: MUTED, align: 'center',
   });
 
   lines(s, [
-    'Friends act as witnesses, in place of designated dial-back servers.',
-    'W2 was never contacted, so filtering behavior is genuinely tested.',
-  ], { y: 5.6, size: 17 });
+    'Only friends. The probe asks each of them directly.',
+    'They dial back from different addresses and ports.',
+    'A nonce in each reply makes a fabricated dial-back impossible.',
+  ], { y: 5.75, size: 16.5, step: 0.44 });
 
-  s.addNotes('Reflection from two friends at distinct addresses recovers mapping behavior; ADDR_REFLECT already does half of it. Filtering is the harder half and needs the relay, since no single witness can produce a packet from an endpoint the probe has never contacted. Three source variants separate EIF, ADF and APDF.');
+  s.addNotes('Reflections from friends at distinct addresses give mapping behavior. Filtering follows from where the dial-backs come from, classified against our own send history: a friend we have a session with, the same friend on a fresh source port, and a friend we have never transmitted to. No friend is ever asked to dial anyone but us, so there is no amplification vector and no relaying for non-friends, which the signaling design forbids anyway.');
 }
 
 // ============================================================ 5 · validity threats
