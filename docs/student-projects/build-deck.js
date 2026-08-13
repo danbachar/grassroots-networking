@@ -133,7 +133,51 @@ function card(s, o) {
   s.addNotes('Two wildcard sockets on port 0, so the port changes on every rebind. The mapped port is only ever learned from ADDR_REFLECT, which needs a session that already works — no use for a first contact. The ten-second announce doubles as the de facto NAT keepalive.');
 }
 
-// ============================================================ 3 · self-classification (dark emphasis)
+// ============================================================ 3 · NAT behavior
+{
+  const s = p.addSlide();
+  title(s, 'NAT behavior', 'What we must distinguish', false);
+
+  const colX = [M, M + 4.0, M + 6.9];
+  const colW = [3.8, 2.7, CW - 6.9];
+  ['Behavior', 'Example', 'Effect on hole punching'].forEach((h, i) => {
+    s.addText(h.toUpperCase(), {
+      x: colX[i], y: 2.15, w: colW[i], h: 0.3, margin: 0,
+      fontFace: BODY, fontSize: 10, bold: true, charSpacing: 1.5, color: MUTED,
+    });
+  });
+
+  const rows = [
+    ['Endpoint-independent', 'most home routers', 'One external port for every destination. Punching works.', TEAL],
+    ['Address-dependent', 'some enterprise NATs', 'A new port per destination address. Both sides must punch.', TEAL],
+    ['Address-and-port-dependent', 'many mobile carriers', 'A new port per endpoint. Punching fails without prediction.', AMBER],
+    ['Carrier-grade NAT', 'prepaid mobile data', 'Stacked above all of it. No unsolicited inbound at all.', AMBER],
+  ];
+  rows.forEach(([b, ex, eff, color], i) => {
+    const y = 2.55 + i * 0.92;
+    if (i % 2 === 0) card(s, { x: M - 0.15, y: y - 0.06, w: CW + 0.3, h: 0.84, fill: 'F6F9F9' });
+    s.addText(b, {
+      x: colX[0], y, w: colW[0], h: 0.72, margin: 0,
+      fontFace: HEAD, fontSize: 15, bold: true, color, valign: 'middle',
+    });
+    s.addText(ex, {
+      x: colX[1], y, w: colW[1], h: 0.72, margin: 0,
+      fontFace: BODY, fontSize: 13, italic: true, color: MUTED, valign: 'middle',
+    });
+    s.addText(eff, {
+      x: colX[2], y, w: colW[2], h: 0.72, margin: 0,
+      fontFace: BODY, fontSize: 14.5, color: '3E4C57', valign: 'middle',
+    });
+  });
+
+  s.addText('We measure the tuple — mapping, filtering, port preservation, lifetime — never a single type.', {
+    x: M, y: 6.35, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
+  });
+
+  s.addNotes('Filtering is the second axis: which inbound traffic is admitted on an existing mapping, endpoint-independent through address-and-port-dependent. Mapping decides whether a port can be predicted at all; filtering decides whether the arriving packet is let through. Port preservation is why the current code sometimes works by accident, and mapping lifetime sets the keepalive interval.');
+}
+
+// ============================================================ 4 · self-classification (dark emphasis)
 {
   const s = p.addSlide();
   s.background = { color: INK };
@@ -166,7 +210,7 @@ function card(s, o) {
   s.addNotes('Confirmed in source at grassroots_network.dart:3369. This is the clearest motivation for the project: the system cannot distinguish a public address from a reachable one, and every consequence follows from that.');
 }
 
-// ============================================================ 4 · the idea
+// ============================================================ 5 · the idea
 {
   const s = p.addSlide();
   title(s, 'Witness-based detection', 'The idea', false);
@@ -215,7 +259,7 @@ function card(s, o) {
   s.addNotes('Reflections from friends at distinct addresses give mapping behavior. Filtering follows from where the dial-backs come from, classified against our own send history: a friend we have a session with, the same friend on a fresh source port, and a friend we have never transmitted to. No friend is ever asked to dial anyone but us, so there is no amplification vector and no relaying for non-friends, which the signaling design forbids anyway.');
 }
 
-// ============================================================ 5 · validity threats
+// ============================================================ 6 · validity threats
 {
   const s = p.addSlide();
   title(s, 'Two validity threats', 'What could invalidate the result', false);
@@ -243,32 +287,6 @@ function card(s, o) {
   });
 
   s.addNotes('Contamination is the one that would quietly invalidate a field campaign: it biases in the direction that looks like good news. We publish the label difference between contaminated and clean runs as a result in its own right. The aggregation asymmetry follows from the nonce being unforgeable while a claimed failure is free.');
-}
-
-// ============================================================ 6 · measurand
-{
-  const s = p.addSlide();
-  title(s, 'The measurand', 'What is recorded', false);
-
-  const items = ['Mapping\nbehavior', 'Filtering\nbehavior', 'Port\npreservation', 'Mapping\nlifetime'];
-  const cw = 2.7, gap = 0.35;
-  items.forEach((t, i) => {
-    const x = M + i * (cw + gap);
-    card(s, { x, y: 2.4, w: cw, h: 1.5 });
-    s.addText(t, {
-      x: x + 0.1, y: 2.4, w: cw - 0.2, h: 1.5, margin: 0,
-      fontFace: HEAD, fontSize: 17, bold: true, color: TEAL_DK, align: 'center', valign: 'middle',
-    });
-  });
-
-  lines(s, [
-    'A tuple, not a NAT type; a single label is derived, never measured.',
-    'Reported per address family and per translation path.',
-    'autoNAT reports reachability only, so it cannot be the ground truth.',
-    'Classification is validated against an RFC 5780 server we operate.',
-  ], { y: 4.4, size: 16.5 });
-
-  s.addNotes('On a 464XLAT path the thing characterized is the carrier translator, which RFC 4787 describes only partially; on native IPv6 there is no mapping at all and only filtering, so mapping and port preservation are N/A rather than absent. CGNAT status and IPv6 availability are recorded alongside.');
 }
 
 // ============================================================ 7 · validation
@@ -303,7 +321,10 @@ function card(s, o) {
   });
 
   s.addText('Address-dependent mapping is built deliberately; no netfilter flag produces it.', {
-    x: M, y: 6.3, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
+    x: M, y: 6.15, w: CW, h: 0.35, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
+  });
+  s.addText('autoNAT reports reachability only, so classification is validated against the RFC 5780 server.', {
+    x: M, y: 6.55, w: CW, h: 0.35, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
   });
 
   s.addNotes('The correctness claim rests on the bench, where labels are known by construction. The reference server needs two public addresses and two ports per family. Default masquerade reads endpoint-independent and --random-fully reads address-and-port-dependent, so the middle class comes from per-destination SNAT via nftables maps.');
