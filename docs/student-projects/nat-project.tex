@@ -666,6 +666,32 @@ script, allows nested translation to be built for a double-NAT case, and removes
 from the labeled tier, where Section~\ref{sec:experiments} notes they never belonged, since their
 policy is observed rather than known by construction.
 
+Mininet is a reasonable way to drive those namespaces, and we expect it to be used, but it should be
+adopted for what it actually provides. It supplies the plumbing: hosts as namespaces, links as veth
+pairs, the topology expressed as a Python script, and per-link loss and delay through \code{TCLink},
+which is what the loss injection of Section~\ref{sec:experiments} needs. It does not supply the NAT
+classes. Its built-in NAT node is a plain masquerade, so each class in Section~\ref{sec:measurand}
+still has to be written by hand in netfilter or nftables, and the address-dependent case still has no
+native expression. Plain \code{ip netns} with a set of rule scripts would serve equally well; the
+choice is one of convenience, and it should be recorded as such rather than presented as the source of
+the labels.
+
+Two further points govern how far the emulation can be trusted. First, an emulated NAT is only the
+outermost translation if the host carrying it is itself untranslated: if the machine sits behind a
+campus or home NAT, a remote peer observes the composition of that NAT with ours, and the label we
+constructed is not the label the peer sees. A publicly addressed host is therefore a precondition for
+any run in which the counterpart is outside the emulation, which is the same requirement the oracle
+imposes. Second, and consequently, the labeled tier is cleanest when the counterparts live inside the
+emulation as well: witnesses at distinct emulated addresses and a two-address oracle are trivial to
+provision as further namespaces, and the whole run stays on one machine with nothing traversing a
+network we do not control. Dialing a node outside the emulation belongs to the cross-check of
+Section~\ref{sec:crosscheck}, where the composition caveat is stated rather than assumed away.
+
+What the emulation cannot supply is the behavior of a real carrier: pool exhaustion under load, the
+differences between one operator's APNs, and the quirks of a particular gateway generation are outside
+its reach. It reproduces a \emph{class}, not a network, which is why the field tier remains the
+handsets.
+
 One caveat is worth stating plainly, as it inverts the usual intuition. A campus network is an
 excellent place to stand \emph{outside} a NAT and a poor subject to measure, since university
 allocations are typically large enough that wired hosts are publicly addressed and not translated at
