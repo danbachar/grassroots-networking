@@ -687,6 +687,60 @@ provision as further namespaces, and the whole run stays on one machine with not
 network we do not control. Dialing a node outside the emulation belongs to the cross-check of
 Section~\ref{sec:crosscheck}, where the composition caveat is stated rather than assumed away.
 
+\subsection{A multi-node testbed}
+\label{sec:multinode}
+
+The emulation is most useful when it holds not one subject but a population. Each node runs in its own
+container, namespace or virtual machine, behind a NAT whose class is set by construction; each runs a
+headless build of the transport and its signaling rather than the full application; the nodes befriend
+one another to form a social graph; and they then run the procedure of Section~\ref{sec:algorithm}
+against each other to establish their own NAT class, their address, and whether they are
+well-connected. Every label is known in advance, for every node, which is what a handset can never
+give us.
+
+Three things follow that handsets cannot provide. The \emph{pairwise matrix} becomes reachable: with
+one node behind each class, every ordered pair of classes can be exercised, and the interesting cases
+are the asymmetric ones, such as an endpoint-independent node dialing an address-and-port-dependent
+one. \emph{Availability becomes a control variable}, since switching nodes off sweeps the number of
+friends online at an uncontacted vantage point directly, where with handsets it can only be observed.
+And the whole thing is always on, reproducible from a script, and costs no SIMs.
+
+Three prerequisites govern whether it can be built, and all three were checked against the code.
+
+\textbf{A headless build is required, and is closer than it appears.} Seven files under
+\code{lib/src/transport} and \code{lib/src/signaling} import Flutter, which would prevent the node
+from running in a container. Four of them import only \code{foundation.dart}, for \code{debugPrint}.
+The remaining coupling is presentation metadata rather than structure: \code{udp\_transport\_service}
+pulls in \code{material.dart} solely for a \code{TransportDisplayInfo} constant naming an icon and a
+color, and the BLE transport does the same. Moving that metadata to the interface layer and replacing
+\code{debugPrint} with a logger is a small refactor, not a port, and \code{bootstrap\_anchor/} is
+already a Flutter-free binary that shows the shape. BLE is not needed on these nodes in any case.
+
+\textbf{The routability predicate needs a test seam, and without one the experiment measures nothing.}
+\code{isGloballyRoutableIPv4} excludes every address range an emulated network could legitimately use:
+the private ranges, the CGNAT range, the documentation ranges, and \code{198.18.0.0/15}, which is the
+benchmarking range reserved for exactly this purpose. Since \code{isWellConnected} is that predicate
+applied to the advertised address, every node in an emulated network would classify itself as not
+well-connected, no node would ever act as a facilitator, and the property under study would never
+arise. The predicate must therefore be injectable, or a testbed mode must treat a configured prefix as
+routable. This is a small change and it belongs in the first weeks, since nothing else in the testbed
+works until it is made.
+
+\textbf{The substrate must not add a translation of its own.} Docker's default bridge masquerades, so
+its NAT composes with the constructed one and the label stops being the label; the bridges must be
+created with masquerading disabled, or the veth pairs wired by hand. This is the composition caveat
+above, in the form it takes on a container host.
+
+On substrate, a campus host running containers or Mininet is the cheaper option and is sufficient for
+the labeled tier, given the seam above. Containernet is worth knowing about, as it runs Docker
+containers as Mininet hosts and gives both the images and the link shaping. Cloud virtual machines buy
+one thing the campus host does not: a genuinely public address for a node that is supposed to be
+well-connected, and for the oracle. What they do not buy is configurable NAT behavior, since a
+provider's managed NAT is a fixed product rather than a knob across the RFC 4787 matrix, so the
+classes would still come from a router instance running our own rules. The reasonable split is
+therefore the emulated population on the campus host, with a public address obtained wherever it is
+easiest for the nodes and the oracle that must be reachable from outside.
+
 What the emulation cannot supply is the behavior of a real carrier: pool exhaustion under load, the
 differences between one operator's APNs, and the quirks of a particular gateway generation are outside
 its reach. It reproduces a \emph{class}, not a network, which is why the field tier remains the
