@@ -120,7 +120,7 @@ itself is a single UDX attempt with a ten-second timeout and no retry inside the
 \textbf{No NAT classification}: no code determines mapping or filtering behavior, and the boolean
 standing in for it is systematically wrong for handsets behind a CGNAT, which advertise a globally
 routable address and are therefore classified as well-connected by themselves and by their peers.
-Three behaviors follow: the pre-connect punch is suppressed for peers that appear public
+This false positive has three consequences: the pre-connect punch is suppressed for peers that appear public
 (\code{grassroots\_network.dart:3369}) and is thus skipped for the peers that require it; the device
 begins acting as an address reflector and rendezvous facilitator; and the interface reports the device
 as well-connected. Nothing distinguishes having a public address from being reachable at it.
@@ -129,7 +129,7 @@ as well-connected. Nothing distinguishes having a public address from being reac
 has yet succeeded, which is the case that matters for a first contact.
 
 \textbf{No use of reflector disagreement}: several rendezvous servers and well-connected friends may
-each reflect the same socket, which is precisely the raw material of an RFC 5780 mapping test, but the
+each reflect the same socket, which is the raw material of an RFC 5780 mapping test, but the
 handler overwrites the stored address and retains nothing, so two disagreeing reflections are
 indistinguishable from a roaming event.
 
@@ -229,7 +229,7 @@ runs without Flutter and is therefore the natural host for the reference server.
 Every witness is a friend of the probe, and the probe addresses each of them directly. We considered
 having one friend relay a dial-back request onwards to a further node, and rejected it: signaling in
 GN is friend-only by design, so that a device never acts on behalf of an arbitrary peer, and a request
-that causes a packet to be sent to a third party is precisely the amplification vector autoNAT v1
+that causes a packet to be sent to a third party is the amplification vector autoNAT v1
 refused to create. Restricting witnesses to friends removes that vector by construction, and the
 requests travel on the existing signaling plane inside Noise sessions, where clear signaling is
 refused on both ends and the eleven types in use occupy \code{0x05}--\code{0x0f}, so that the witness
@@ -247,11 +247,10 @@ from a second local port, establish whether the mapped port varies with the dest
 distinct address and to retain each observation as a \code{(reflector, tuple, timestamp)} triple
 instead of overwriting it.
 
-The provenance is worth stating, as it is easily misread. The measurand and the test procedures come
-from RFC 4787 and RFC 5780; the dial-back mechanism comes from autoNAT, which is a libp2p protocol
-specification and not an RFC; and the substitution of friends for designated servers is ours. What the
-student implements is therefore the RFC 5780 procedures with friends supplying the alternate vantage
-points that the RFC expects a dual-homed server to supply.
+The measurand and the test procedures come from RFC 4787 and RFC 5780; the dial-back mechanism comes
+from autoNAT, which is a libp2p protocol specification and not an RFC; and the substitution of friends
+for designated servers is ours. The student therefore implements the RFC 5780 procedures, with friends
+supplying the alternate vantage points that the RFC expects a dual-homed server to supply.
 
 Filtering behavior follows from where the dial-backs originate, classified against the probe's own
 send history rather than against the identity of the friend. A dial-back from an address and port the
@@ -332,7 +331,7 @@ permissiveness.
 We mitigate this with a per-test send history of every destination emitted on the measured socket: a
 witness source appearing in that history is a logged discard condition, and the strict filtering arm
 must originate from an endpoint never contacted. This constrains witness selection rather than the
-protocol, as the friends currently in session are precisely the contaminated ones, and it makes the
+protocol, as the friends currently in session are the contaminated ones, and it makes the
 availability question sharper: what matters is not how many friends are online, but how many are
 online at a vantage point the probe has not already used. Running the same test with and without
 a prior punch towards the witness quantifies the bias that naive witness-based tests incur.
@@ -342,17 +341,17 @@ a prior punch towards the witness quantifies the bias that naive witness-based t
 
 We assume throughout that peers are honest: a friend that reports a dial-back performed it, and a
 friend that reports a failure observed one. This is a stated assumption and not a claim about the
-deployment, and relaxing it --- witnesses that fabricate successes, withhold them, or collude --- is a
-natural extension of this work and not part of it. Two consequences are worth separating, as only one
-of them disappears under the assumption.
+deployment, and relaxing it to witnesses that fabricate successes, withhold them, or collude is a
+natural extension of this work and not part of it. The assumption removes one concern and leaves
+another standing.
 
-What disappears is the need to defend against a lying witness, and with it the byzantine analysis. No
-quorum is required to establish that a dial-back happened, and a reported failure can be taken at face
-value as that witness's own observation.
+It removes the need to defend against a lying witness, and with it the byzantine analysis: no quorum
+is required to establish that a dial-back happened, and a reported failure can be taken at face value
+as that witness's own observation.
 
-What remains is that the network is not honest merely because the peers are. An off-path party can
-still inject a packet resembling a dial-back, and the probe would otherwise conclude that it is
-reachable when it is not. The client-chosen nonce therefore stays, with a different justification: it
+It leaves standing the fact that the network is not honest merely because the peers are. An off-path
+party can still inject a packet resembling a dial-back, and the probe would otherwise conclude that it
+is reachable when it is not. The client-chosen nonce therefore stays, for a different reason: it
 binds an arriving packet to the request that solicited it, distinguishing a genuine dial-back both
 from unrelated traffic and from injection by a party that is not a friend.
 
@@ -373,7 +372,7 @@ open path is reported closed is a quantity the evaluation must state.
 
 Disagreement between witnesses is a measurement signal under this model and not a sign of misbehavior.
 Where one vantage point succeeds and another fails, the likely explanation is that the behavior under
-test genuinely depends on the source address or port, which is precisely the distinction between
+test genuinely depends on the source address or port, which is the distinction between
 endpoint-independent, address-dependent and address-and-port-dependent filtering. Disagreement is
 therefore retained and classified, never voted away.
 
@@ -384,8 +383,8 @@ restriction of Section~\ref{sec:approach} buys. And the probe refuses to dial or
 is not globally routable, using the predicate already present in \code{address\_utils.dart} but not
 applied on the punch path. Measurement traffic from the probe is confined to the testbed by a target
 allowlist enforced at the send path, and measurement is never enabled in the production build. The one
-exception is the external cross-check of Section~\ref{sec:crosscheck}, which is run deliberately and
-by hand, from a separate process rather than from the probe.
+exception is the external cross-check of Section~\ref{sec:crosscheck}, which is run manually, from a
+separate process and not from the probe.
 
 \subsection{An external cross-check}
 \label{sec:crosscheck}
@@ -404,7 +403,7 @@ the application is the cost this project explicitly avoids, so the cross-check r
 standalone client on a general-purpose host attached to the same network. It therefore characterizes
 the \emph{network} rather than the transport's own socket, and on cellular it can only be run by
 tethering, which inserts a further translation layer and makes the comparison invalid. We run it on
-Wi-Fi networks and state the cellular gap rather than papering over it.
+Wi-Fi networks and state the cellular gap.
 
 It leaves the testbed. The requests go to public infrastructure that exists to answer them, they are
 protocol-conformant and few, and they are issued by hand rather than by the probe. This is the only
@@ -428,7 +427,7 @@ Android and iOS differ here, each cellular stratum is measured on at least two h
 each platform.
 
 \textbf{Cellular strata}: one per carrier, APN and PDN type, and not one per carrier. These strata
-are few and cheap to enumerate, but each carries a large weight, which is why an undetected error
+are few and cheap to enumerate, but each carries a large weight, so an undetected error
 inside one is expensive and why each is covered by at least two SIMs and two handset stacks before its
 homogeneity is treated as established. Homogeneity within a carrier remains an assumption, and the
 ways it fails are known: the APN tier, as a consumer prepaid SIM generally cannot reach corporate or
@@ -545,7 +544,7 @@ at least two SIMs differing in plan or operator arrangement, and by at least two
 
 \paragraph{Procedure.} Each stratum is measured on at least two days, spanning a peak and an off-peak
 window, with the screen on and off and the application in the foreground and the background. Roaming
-and handover are triggered deliberately. Mapping lifetime is probed per network with the announce
+and handover are triggered manually. Mapping lifetime is probed per network with the announce
 timer quiesced for the duration of the probe.
 
 \paragraph{Measures.} The full measurand per stratum, with the translation path; the pairwise
@@ -663,8 +662,7 @@ than one large host.
 The \textbf{bench} can be hosted rather than assembled on a desk. Running the netfilter configurations
 inside network namespaces on a single always-on machine makes the topologies reproducible from a
 script, allows nested translation to be built for a double-NAT case, and removes the physical routers
-from the labeled tier, where Section~\ref{sec:experiments} notes they never belonged, since their
-policy is observed rather than known by construction.
+from the labeled tier, since their policy is observed and not known by construction.
 
 Mininet is a reasonable way to drive those namespaces, and we expect it to be used, but it should be
 adopted for what it actually provides. It supplies the plumbing: hosts as namespaces, links as veth
@@ -685,7 +683,7 @@ imposes. Second, and consequently, the labeled tier is cleanest when the counter
 emulation as well: witnesses at distinct emulated addresses and a two-address oracle are trivial to
 provision as further namespaces, and the whole run stays on one machine with nothing traversing a
 network we do not control. Dialing a node outside the emulation belongs to the cross-check of
-Section~\ref{sec:crosscheck}, where the composition caveat is stated rather than assumed away.
+Section~\ref{sec:crosscheck}, where the composition caveat is stated.
 
 \subsection{A multi-node testbed}
 \label{sec:multinode}
@@ -698,7 +696,7 @@ against each other to establish their own NAT class, their address, and whether 
 well-connected. Every label is known in advance, for every node, which is what a handset can never
 give us.
 
-Three things follow that handsets cannot provide. The \emph{pairwise matrix} becomes reachable: with
+The emulation provides three things that handsets cannot. The \emph{pairwise matrix} becomes reachable: with
 one node behind each class, every ordered pair of classes can be exercised, and the interesting cases
 are the asymmetric ones, such as an endpoint-independent node dialing an address-and-port-dependent
 one. \emph{Availability becomes a control variable}, since switching nodes off sweeps the number of
@@ -732,8 +730,8 @@ created with masquerading disabled, or the veth pairs wired by hand. This is the
 above, in the form it takes on a container host.
 
 On substrate, a campus host running containers or Mininet is the cheaper option and is sufficient for
-the labeled tier, given the seam above. Containernet is worth knowing about, as it runs Docker
-containers as Mininet hosts and gives both the images and the link shaping. Cloud virtual machines buy
+the labeled tier, given the seam above. Containernet runs Docker containers as Mininet hosts, and
+gives both the images and the link shaping. Cloud virtual machines buy
 one thing the campus host does not: a genuinely public address for a node that is supposed to be
 well-connected, and for the oracle. What they do not buy is configurable NAT behavior, since a
 provider's managed NAT is a fixed product rather than a knob across the RFC 4787 matrix, so the
@@ -743,10 +741,9 @@ easiest for the nodes and the oracle that must be reachable from outside.
 
 What the emulation cannot supply is the behavior of a real carrier: pool exhaustion under load, the
 differences between one operator's APNs, and the quirks of a particular gateway generation are outside
-its reach. It reproduces a \emph{class}, not a network, which is why the field tier remains the
-handsets.
+its reach. It reproduces a \emph{class} and not a network, so the field tier remains the handsets.
 
-One caveat is worth stating plainly, as it inverts the usual intuition. A campus network is an
+A campus network is an
 excellent place to stand \emph{outside} a NAT and a poor subject to measure, since university
 allocations are typically large enough that wired hosts are publicly addressed and not translated at
 all. The subjects of the measurement remain the handsets on carrier and residential paths; what the
@@ -754,7 +751,7 @@ institution supplies is the vantage points they are measured against. Campus wir
 network and the institutional VPN are separate matters, as each is a genuine access network with its
 own policy and each is worth characterizing in its own right.
 
-\subsection{What this deliberately excludes}
+\subsection{What this project excludes}
 
 Three items that belong to the research question are outside a semester and are named here so that
 their absence is a decision and not an oversight. The \textbf{autoNAT sidecar} is removed, as
@@ -772,7 +769,7 @@ number comes out. Concretely: the probe is implemented and sends from the transp
 the reason it cannot is documented; the bench is reproducible and its labels are known by
 construction; the witness algorithm's agreement with the oracle is measured and every disagreement is
 explained; the contamination guard's effect is quantified; and the limitations are stated. A result in
-which the witness approach agrees poorly with the oracle is a finding, and is written up as one --- it
+which the witness approach agrees poorly with the oracle is a finding, and is written up as one: it
 would tell us that friends are not a sufficient substitute for designated servers, which is precisely
 what the project set out to determine.
 
