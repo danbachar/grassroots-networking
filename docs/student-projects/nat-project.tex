@@ -44,801 +44,103 @@
 \maketitle
 \vspace{-0.8cm}
 
+
 \section{Introduction}
-\label{sec:intro}
 
-Grassroots Networking (GN) is a peer-to-peer messaging transport that moves packets between mobile
-devices over two mediums: Bluetooth Low Energy (BLE) for peers in physical proximity, and UDP over the
-Internet for remote peers. The Internet relation assumes successful NAT traversal across heterogeneous
-home, mobile and enterprise networks, and the decision space for that relation,
-whether to dial directly with hole punching, to coordinate through a rendezvous point, or to fall
-back on a relay, depends on how NAT is actually deployed in the networks our users inhabit. We have
-never measured any of this: every constant in the transport, from the two-second punch to the
-ten-second connection timeout, was chosen by intuition and not derived from data.
+Grassroots Networking (GN) is one application-layer overlay over two transport underlays: a Bluetooth Low Energy (BLE) mesh for devices in radio range, and, when a wide-area network is available, the Internet, carrying UDP datagrams between trusted peers. The Internet underlay assumes that NAT traversal works. We have never measured whether this works for our users. Every constant in the transport, from the two-second punch to the ten-second connection timeout, was chosen by intuition. Public NAT measurements are dated and come from desktop and server vantage points~\cite{Jennings2005,Guha2005}. The hardest case is a smartphone behind a carrier-grade NAT (CGNAT). Such a phone cannot see its own public address, cannot accept unsolicited inbound traffic, and may get a new external port per destination, which defeats hole punching. Only code on smartphones with commercial SIMs can observe this.
 
-Public NAT measurements exist, but they are dated and skewed towards web and CDN workloads observed
-from desktop and server vantage points~\cite{Jennings2005,Guha2005}. Mobile networks are the least
-covered by those measurements, and at the same time the least favorable to traversal, as a handset
-behind a carrier-grade NAT (CGNAT) cannot observe its own outer
-address, cannot accept unsolicited inbound traffic, and may be assigned a different external port for
-every destination it contacts, which defeats hole punching entirely. Desktop tooling cannot observe
-any of this, as it does not sit behind the carrier; measuring it requires code running on handsets
-carrying commercial SIMs, over the carrier networks those SIMs traverse.
+The second problem is how a device learns whether it is reachable. libp2p's autoNAT asks other nodes to dial a peer back, meaning to attempt a connection to it, and sees whether the attempt arrives~\cite{autonat}. In practice it depends on a few well-known dial-back nodes, which is the privileged infrastructure a grassroots system is meant to avoid. GN already has a graph of mutually authenticated friends. We ask whether friends can serve as the dial-back nodes, which we call \emph{witnesses}, and what accuracy we lose by replacing designated servers with them. The project designs and validates such an algorithm and runs it on a testbed we control. It compares the result against a reference: a server that implements RFC 5780, which needs two public addresses and two ports. We run one ourselves and call it the \emph{oracle}. Finally, it measures real networks with our own smartphones.
 
-In addition to the measurement gap, a second problem lies in the architecture of reachability
-detection itself. The established way for a peer to learn whether it is reachable
-is to ask other nodes to dial it back, as libp2p's autoNAT does~\cite{autonat}. Although autoNAT is
-nominally decentralized, in practice it depends on a small set of well-known dial-back nodes, which
-reintroduces the privileged infrastructure that a grassroots system is designed to do without.
-GN already maintains a social graph of mutually authenticated friends, and we therefore ask whether
-that graph can serve as the witness set instead, and what accuracy we lose by replacing designated
-servers with friends.
+\section{Where the transport stands}
 
-In this project we design and validate a NAT detection algorithm that uses social-graph peers as
-\emph{dial-back witnesses}, evaluate it against a reference implementation on a testbed under our control,
-and use the resulting measurements to derive a decision rule for the transport. The results determine
-whether rendezvous anchors are needed by the median user or only as a fallback, whether to invest
-further in the UDP relation or push BLE harder, whether a relay is ever necessary, and how strongly to
-prefer IPv6 over IPv4.
-
-\section{The current transport and its blind spots}
-\label{sec:current}
-
-We first describe the IP path as it is implemented today, since the gaps in
-Section~\ref{sec:gaps} follow directly from it. References are to files in the
-\code{grassroots\_networking} repository.
-
-The transport binds one wildcard UDP socket per address family, both on port 0, so the port is
-assigned by the operating system and changes on every rebind
-(\code{udp\_transport\_service.dart:1009}). A UDX multiplexer wraps each socket and owns all reads
-from it. A device learns its own address in two ways: by an HTTPS request to an external reflection
-service (\code{public\_address\_discovery.dart:40}), and through \code{ADDR\_REFLECT}, a signaling
-message in which a well-connected peer reports the source address it observed on an incoming session
-(\code{signaling\_service.dart:760}). No STUN client exists in the repository.
-
-The address a device advertises is that discovered public IP paired with its own locally bound port
-(\code{public\_address\_discovery.dart:97}), which never reveals the NAT-mapped port, and the only
-source of that port requires a session which already works. Self-classification is a single boolean,
-\code{isWellConnected}, computed as a routability test over the advertised string; the test correctly
-excludes 100.64/10 among other reserved ranges (\code{address\_utils.dart:138}), but a handset behind
-a CGNAT never observes its inner address, so the exclusion never applies to it.
-
-Peers advertise address candidates in a signed \code{ANNOUNCE} that repeats every ten seconds; the
-same timer drives liveness, reconnection and the queued-message drain, and there is no dedicated NAT
-keepalive. Candidate selection scans every local-remote pair and returns exactly one, ranked
-link-local, then IPv6, then IPv4 (\code{connection\_service.dart:48}); nothing probes candidates in
-parallel, validates them, or falls back to the second-best pair after a failed attempt. The hole punch
-is a 36-byte packet carrying a magic value and the sender's public key, sent for two seconds at
-200\,ms intervals to a single address and port, without port prediction
-(\code{hole\_punch\_service.dart:117}). A closed-loop variant exists but has no production caller and
-cannot function as wired, since it reads the raw socket that the multiplexer already owns. The dial
-itself is a single UDX attempt with a ten-second timeout and no retry inside the transport.
-
-\subsection{What we cannot currently determine}
-\label{sec:gaps}
-
-\textbf{No NAT classification}: no code determines mapping or filtering behavior, and the boolean
-standing in for it is systematically wrong for handsets behind a CGNAT, which advertise a globally
-routable address and are therefore classified as well-connected by themselves and by their peers.
-This false positive has three consequences: the pre-connect punch is suppressed for peers that appear public
-(\code{grassroots\_network.dart:3369}) and is thus skipped for the peers that require it; the device
-begins acting as an address reflector and rendezvous facilitator; and the interface reports the device
-as well-connected. Nothing distinguishes having a public address from being reachable at it.
-
-\textbf{No mapped-port discovery}: the port we instruct peers to dial is a guess whenever no session
-has yet succeeded, which is the case that matters for a first contact.
-
-\textbf{No use of reflector disagreement}: several rendezvous servers and well-connected friends may
-each reflect the same socket, which is the raw material of an RFC 5780 mapping test, but the
-handler overwrites the stored address and retains nothing, so two disagreeing reflections are
-indistinguishable from a roaming event.
-
-\textbf{No dial-back and no witnesses}: reachability from outside is asserted from an address prefix
-and never tested, and the inbound-connection observation point that exists in the transport is never
-read for a decision.
-
-\textbf{No instrumentation}: punch outcomes are a four-value enumeration without timestamps and the
-reducer discards the failure reason, so neither latency nor robustness can be computed after the fact.
-Punching being open-loop, a refused mapping, a lost packet, a wrong port and a slow handshake are
-indistinguishable in the logs.
-
-These combine in practice. Consider two friends previously paired over BLE and now remote: one behind
-a carrier CGNAT on an IPv4-only path, the other behind a consumer router with IPv4 and a working IPv6
-prefix. The first advertises the carrier's outer address with its own local port, and both compute
-that it is well-connected, which is wrong in the port and in the reachability it implies. Candidate
-selection then prefers the second device's IPv6 address, as an IPv6 socket is bound on the first even
-though it has no IPv6 transit, and the single attempt times out after ten seconds without falling back
-to IPv4. The punch is suppressed on both sides, each observing the other as public, and had it fired
-it would have targeted the local ports. Nothing is recorded, and the failure is indistinguishable from
-the peer being offline; on a port-preserving NAT, where the guessed port is correct and the attempt
-succeeds, nothing is learned either.
+The transport does not classify NATs. It binds one UDP socket per address family (IPv4, IPv6) on an OS-assigned port, and advertises the externally discovered address with its own local port, never the port the NAT assigned (\code{public\_address\_discovery.dart:97}). A device classifies itself with one true/false flag, \code{isWellConnected}, which tests whether the advertised address looks publicly routable. A phone behind a CGNAT advertises the carrier's public address, so it passes, and the pre-connect hole punch is skipped for exactly the peers that need it (\code{grassroots\_network.dart:3369}). The punch itself is open-loop: 36 bytes sent for two seconds to one guessed address and port, with no feedback on whether it worked. A \emph{reflection} is a peer telling a device which address and port it saw the device at. Reflections from several peers overwrite each other, so the disagreement between them, which is the raw material of a NAT test, is lost. Punch outcomes carry no timestamps and no failure reason, so a failed dial looks the same as an offline peer.
 
 \section{Research questions}
-\label{sec:rqs}
 
-\textbf{RQ1}: can social-graph peers replace designated dial-back servers? We specify a witness-based
-algorithm that recovers a peer's mapping and filtering behavior, and quantify its agreement with an
-RFC 5780 reference implementation.
+\textbf{RQ1}: Can friends replace designated dial-back servers? We specify an algorithm in which friends act as witnesses, and measure how well its verdicts agree with the oracle's.
 
-\textbf{RQ2}: what does decentralization cost? Under the honesty assumption of
-Section~\ref{sec:assumption} the cost is statistical and not adversarial, and takes three forms. How
-many witnesses does a confident verdict require? The minimum set is fixed by the test matrix of
-Section~\ref{sec:algorithm} rather than by any accuracy target, so the open question is how many
-repetitions and how many further friends are needed for confidence, given that a dial-back may fail to
-arrive for reasons unrelated to our NAT. What does disagreement between witnesses at different vantage points indicate,
-since under honest peers it is diagnostic rather than malicious? And what is the availability
-constraint, $P(\geq k$ friends online at an uncontacted vantage point$)$, which we expect to dominate
-in practice?
+\textbf{RQ2}: What does decentralization cost? A dial-back can be lost for reasons unrelated to the NAT, so we ask how many witnesses and repetitions a confident verdict needs, and what it means when witnesses disagree.
 
-\textbf{RQ3}: which NAT behaviors occur in the networks our users inhabit, and how prevalent are
-they? We measure the tuple of Section~\ref{sec:measurand} per stratum on our own devices, and estimate
-population prevalence by weighting strata with published subscriber counts, as described in
-Section~\ref{sec:prevalence}.
+\textbf{RQ3}: Which NAT behaviors occur on the networks our users inhabit, and how common is each?
 
-\textbf{RQ4}: what should the transport do at dial time? We derive a decision rule over the inputs
-the transport holds at the moment it must decide, namely to attempt directly, to request mediation,
-or to abort, and validate it by replay.
-
-\subsection{Measurand}
-\label{sec:measurand}
-
-Instead of a NAT type, and following RFC 4787 and RFC 5780~\cite{rfc4787,rfc5780}, we decided to
-measure a tuple: \emph{mapping behavior}, which is endpoint-independent, address-dependent or
-address-and-port-dependent; \emph{filtering behavior}, which is endpoint-independent (EIF),
-address-dependent (ADF) or address-and-port-dependent (APDF); \emph{port preservation}; and
-\emph{mapping lifetime}.
-The orthogonal facts of CGNAT suspicion and IPv6 availability are recorded alongside. A single-label
-NAT type may be derived from the tuple for presentation, but is never the measurand.
-
-The tuple is measured and reported per address family and per translation path, which is either NAT44,
-NAT64 with 464XLAT, or native IPv6. On a 464XLAT path the entity being characterized is the carrier's
-translator, which the RFC 4787 vocabulary describes only partially, and on a native IPv6 path there is
-typically no mapping at all and only stateful filtering, so mapping behavior and port preservation
-are reported as not applicable rather than as absent. The translation path therefore splits strata and
-is not an orthogonal attribute.
-
-We note that autoNAT does not produce this measurand. Version 1 reports whether a node is publicly
-reachable, and version 2 reports whether a given address is dialable, with a nonce in the dial-back
-request~\cite{autonat}; neither emits a mapping or filtering label. The categorization is therefore
-ours to implement and not to import: the dial-back idea is taken from autoNAT, but the classifier that
-turns a set of dial-back outcomes into a mapping and filtering label is part of the delivered code.
-Ground truth for it is an RFC 5780 reference server that we operate ourselves.
+We follow RFC 4787 and RFC 5780~\cite{rfc4787,rfc5780} and measure four properties instead of one NAT type, per address family:
+\begin{itemize}
+  \item \emph{Mapping behavior}: which external port the NAT assigns to outbound traffic. It is endpoint-independent if one port serves every destination, address-dependent if each destination address gets its own, and address-and-port-dependent if each destination address and port pair does.
+  \item \emph{Filtering behavior}: which inbound senders the NAT lets through an existing mapping. Same three levels: anyone, only addresses we sent to, or only the exact address and port we sent to.
+  \item \emph{Port preservation}: whether the external port equals our own local port.
+  \item \emph{Mapping lifetime}: how long an idle mapping survives.
+\end{itemize}
+autoNAT reports none of these~\cite{autonat}, so the classifier is ours to write.
 
 \section{Approach}
-\label{sec:approach}
 
-\subsection{Witness-based detection}
+The \emph{probe} is the device being measured. Its code lives in \code{lib/src/transport/} and sends from the transport's own socket, since a second socket gets a different mapping and measures a different path. Every witness is a friend, and the probe addresses each one directly. Friends are the only witnesses because GN signaling is friend-only, and a request that makes a third party send a packet is an amplification vector (a way to aim traffic at a victim), which autoNAT v1 refused to create. A friend does two things: it reflects, and it \emph{dials back}, meaning it sends the probe a packet from a source address and port that it names in advance. Each dial-back must carry a \emph{nonce}, a random number the probe chose for that request. A packet without the right nonce is ignored, so the report cannot be faked and an injected packet is rejected.
 
-To characterize the path the transport actually uses, we decided to implement the probe inside
-\code{grassroots\_networking}, under \code{lib/src/transport/}, and to send from the transport's
-existing per-family socket instead of from a socket of its own, as a second socket receives a
-different NAT mapping and thus characterizes a different path altogether. The UDX fork exposes a
-raw-packet callback for this purpose, and three properties of the existing code constrain its use: the
-raw handler discards datagrams shorter than 50 bytes and 36-byte punch packets, so probes must exceed
-50 bytes and carry their own magic value; the existing raw send path registers targets in a map that
-is not cleared on shutdown, so a separate send path is required to keep the announce broadcast away
-from measurement targets; and the closed-loop punch mode is inoperative for the read-ownership reason
-given in Section~\ref{sec:current}.
+The procedure has two rounds. In round one each friend reflects. If every friend saw the same address and port, mapping is endpoint-independent. If friends at different addresses saw different ports but one friend, reached from two of its ports, reports the same port, it is address-dependent. If that friend reports different ports, it is address-and-port-dependent. In round two the probe requests three dial-backs: $D_1$ from an endpoint it has sent to, $D_2$ from the same address on a fresh port, and $D_3$ from an address it never sent to.
 
-Several components are reused instead of rebuilt: the punch service, the address-class labeler in
-\code{address\_utils.dart}, which already excludes CGNAT, ULA, Teredo and 6to4, the candidate scorer
-on which the probe loop is layered, the Noise session manager for the authenticated channel, the
-signed invite records as the template for a witness attestation, and \code{bootstrap\_anchor/}, which
-runs without Flutter and is therefore the natural host for the reference server.
-
-Every witness is a friend of the probe, and the probe addresses each of them directly. We considered
-having one friend relay a dial-back request onwards to a further node, and rejected it: signaling in
-GN is friend-only by design, so that a device never acts on behalf of an arbitrary peer, and a request
-that causes a packet to be sent to a third party is the amplification vector autoNAT v1
-refused to create. Restricting witnesses to friends removes that vector by construction, and the
-requests travel on the existing signaling plane inside Noise sessions, where clear signaling is
-refused on both ends and the eleven types in use occupy \code{0x05}--\code{0x0f}, so that the witness
-messages are purely additive from \code{0x10} upwards.
-
-Each friend performs two functions. It \emph{reflects}, by reporting the source address and port it
-observed for the request, and it \emph{dials back} on request, sending the probe a packet carrying the
-client-chosen nonce from a source it names in its reply. The nonce is what makes the report
-unforgeable: a friend cannot claim a dial-back that never arrived, since the probe accepts only a
-packet carrying the value it generated.
-
-Mapping behavior follows from the reflections. Two friends at distinct addresses, plus one reporting
-from a second local port, establish whether the mapped port varies with the destination.
-\code{ADDR\_REFLECT} already performs the reflection; what remains is to solicit it from a second
-distinct address and to retain each observation as a \code{(reflector, tuple, timestamp)} triple
-instead of overwriting it.
-
-The measurand and the test procedures come from RFC 4787 and RFC 5780; the dial-back mechanism comes
-from autoNAT, which is a libp2p protocol specification and not an RFC; and the substitution of friends
-for designated servers is ours. The student therefore implements the RFC 5780 procedures, with friends
-supplying the alternate vantage points that the RFC expects a dual-homed server to supply.
-
-Filtering behavior follows from where the dial-backs originate, classified against the probe's own
-send history rather than against the identity of the friend. A dial-back from an address and port the
-probe currently has a session with establishes the baseline; one from the same address on a fresh
-source port separates address-and-port-dependent filtering from the rest; and one from an address the
-probe has never transmitted to separates address-dependent from endpoint-independent filtering. The
-third arm is the constraining one, as it requires a friend with which no session is currently open, or
-a second address of a multi-homed friend that the probe has not used. Friends with a stable public
-address are the most valuable witnesses for it, and the number of distinct uncontacted vantage points
-the friend set can present bounds which filtering classes are separable at all.
-
-\subsection{The procedure}
-\label{sec:algorithm}
-
-A run proceeds in two rounds over a chosen set of friends, each of which is recorded with its address,
-its port, and whether the probe has previously transmitted to it.
-
-\emph{Round one, reflection.} Each friend reports the source address and port it observed. Writing
-$R(f)$ for the tuple reported by friend $f$, the mapping label follows from how $R$ varies:
-
-\begin{longtable}{L{7.4cm} L{7.4cm}}
+\begin{center}
+\begin{tabular}{ll}
 \toprule
-\rowcolor{headerblue}
-\textcolor{white}{\textbf{Observation}} & \textcolor{white}{\textbf{Mapping label}} \\
+\textbf{Arrives} & \textbf{Filtering} \\
 \midrule
-\endhead
-$R$ identical for every friend & endpoint-independent \\
-\rowcolor{rowgray}
-$R$ differs across friends at distinct addresses, but agrees across two ports of one friend &
-address-dependent \\
-$R$ differs across two ports of the same friend & address-and-port-dependent \\
+$D_3$ & endpoint-independent \\
+$D_2$, not $D_3$ & address-dependent \\
+$D_1$, not $D_2$ & address-and-port-dependent \\
+none & inconclusive \\
 \bottomrule
-\end{longtable}
+\end{tabular}
+\end{center}
 
-\emph{Round two, dial-back.} The probe requests three dial-backs, each carrying the nonce, and
-classifies filtering by which of them arrive. $D_1$ originates from an address and port the probe has
-transmitted to, $D_2$ from that same address on a source port it has not, and $D_3$ from an address it
-has never transmitted to.
+Three friends in the right positions, meaning two at distinct addresses and one that can send from two ports, separate every class. More friends only add confidence against loss. A dial-back that arrives is proof. One that does not is ambiguous, since it is equally consistent with filtering and with a lost packet, so the probe retries and asks $k$ different witnesses before it records a negative. Disagreement between witnesses is kept and classified, never voted away. We assume friends are honest: that a friend which reports a dial-back sent it. Witnesses that lie are out of scope.
 
-\begin{longtable}{L{7.4cm} L{7.4cm}}
-\toprule
-\rowcolor{headerblue}
-\textcolor{white}{\textbf{Arrivals}} & \textcolor{white}{\textbf{Filtering label}} \\
-\midrule
-\endhead
-$D_3$ arrives & endpoint-independent \\
-\rowcolor{rowgray}
-$D_3$ absent, $D_2$ arrives & address-dependent \\
-$D_2$ absent, $D_1$ arrives & address-and-port-dependent \\
-\rowcolor{rowgray}
-$D_1$ absent & inconclusive: retry, then report no path \\
-\bottomrule
-\end{longtable}
+The main threat to validity is \emph{contamination}. Friends are the peers the device already sends to, so a dial-back from one passes through a mapping the probe opened itself, and the NAT looks more open than it is. The \emph{guard} prevents this. The probe logs every destination it sends to from the measured socket, and the guard discards any dial-back whose source is in that log. The strict filtering test therefore needs a friend the probe has no link to, and never sent a UDP packet to. The probe cannot ask such a friend over UDP, since that packet would open the very mapping under test. The request reaches it over BLE, or through a mutual well-connected friend that passes it on. The probe sends nothing to the friend's address, and only the friend's dial-back arrives. Repeating one arm with the guard switched off measures the bias.
 
-An arrival is definitive and terminates its arm. An absence is retried under the policy of
-Section~\ref{sec:aggregation} before it is recorded, since under honest peers an absent dial-back is
-equally consistent with filtering and with loss.
-
-\emph{How many friends this needs.} The answer is combinatorial before it is statistical. Separating
-endpoint-independent from address-dependent mapping requires two friends at distinct addresses;
-separating address-dependent from address-and-port-dependent requires one friend reachable on two
-ports; the endpoint-independent filtering test requires one friend never transmitted to; and the
-remaining filtering distinction requires a contacted friend able to send from a fresh source port.
-Three friends with the right properties therefore suffice to make every class separable, and no number
-of additional friends improves the resolution. What further friends and repetitions buy is confidence
-against loss, which is the subject of Section~\ref{sec:aggregation} and of the second experiment.
-
-\subsection{Contamination}
-\label{sec:contamination}
-
-The central validity threat, which we call \emph{contamination}, is that social witnesses are by
-construction the peers the device already transmits to, through an \code{ANNOUNCE} every ten seconds
-on every live connection and roughly ten punch datagrams per traversal attempt. A dial-back from an
-endpoint the probe has previously contacted traverses a mapping the probe itself opened, and therefore
-measures the probe's own behavior instead of the NAT's filtering rule, biasing results towards
-permissiveness.
-
-We mitigate this with a per-test send history of every destination emitted on the measured socket: a
-witness source appearing in that history is a logged discard condition, and the strict filtering arm
-must originate from an endpoint never contacted. This constrains witness selection rather than the
-protocol, as the friends currently in session are the contaminated ones, and it makes the
-availability question sharper: what matters is not how many friends are online, but how many are
-online at a vantage point the probe has not already used. Running the same test with and without
-a prior punch towards the witness quantifies the bias that naive witness-based tests incur.
-
-\subsection{Assumption: honest peers}
-\label{sec:assumption}
-
-We assume throughout that peers are honest: a friend that reports a dial-back performed it, and a
-friend that reports a failure observed one. This is a stated assumption and not a claim about the
-deployment, and relaxing it to witnesses that fabricate successes, withhold them, or collude is a
-natural extension of this work and not part of it. The assumption removes one concern and leaves
-another standing.
-
-It removes the need to defend against a lying witness, and with it the byzantine analysis: no quorum
-is required to establish that a dial-back happened, and a reported failure can be taken at face value
-as that witness's own observation.
-
-It leaves standing the fact that the network is not honest merely because the peers are. An off-path
-party can still inject a packet resembling a dial-back, and the probe would otherwise conclude that it
-is reachable when it is not. The client-chosen nonce therefore stays, for a different reason: it
-binds an arriving packet to the request that solicited it, distinguishing a genuine dial-back both
-from unrelated traffic and from injection by a party that is not a friend.
-
-\subsection{Aggregation and failure semantics}
-\label{sec:aggregation}
-
-Success and failure are not symmetric, and under honest peers the asymmetry follows from packet loss
-and not from deceit. A dial-back that arrives carrying the nonce is definitive: the path exists and
-the NAT admitted it. A dial-back that does not arrive is not definitive, as it is equally consistent
-with the NAT filtering the packet, with the witness being unable to send from the requested source,
-and with ordinary loss on either path.
-
-The aggregation rule follows. Any verified arrival establishes the property under test. An absence is
-recorded as inconclusive until the arm has been retried and attempted through $k$ independent
-witnesses, and only then reported as a negative result. The retry and timeout policy is therefore part
-of the specification and not an implementation detail, and the residual probability that a genuinely
-open path is reported closed is a quantity the evaluation must state.
-
-Disagreement between witnesses is a measurement signal under this model and not a sign of misbehavior.
-Where one vantage point succeeds and another fails, the likely explanation is that the behavior under
-test genuinely depends on the source address or port, which is the distinction between
-endpoint-independent, address-dependent and address-and-port-dependent filtering. Disagreement is
-therefore retained and classified, never voted away.
-
-Two engineering constraints survive the assumption, as they protect parties outside it. A dial-back
-targets only the source address the friend itself observed, and never an address carried in the
-request, so the protocol cannot direct traffic at a third party; this is what the friends-only
-restriction of Section~\ref{sec:approach} buys. And the probe refuses to dial or punch any target that
-is not globally routable, using the predicate already present in \code{address\_utils.dart} but not
-applied on the punch path. Measurement traffic from the probe is confined to the testbed by a target
-allowlist enforced at the send path, and measurement is never enabled in the production build. The one
-exception is the external cross-check of Section~\ref{sec:crosscheck}, which is run manually, from a
-separate process and not from the probe.
-
-\subsection{An external cross-check}
-\label{sec:crosscheck}
-
-The classifier consumes dial-backs from friends only. Separately, and clearly labeled as such, we
-query the public libp2p autoNAT nodes as an outside reference on \emph{reachability alone}, so that
-our friends-only verdict is not the only opinion in the record. Three caveats determine how much this
-can be asked to carry.
-
-It answers a narrower question. autoNAT reports whether a node is publicly reachable, and version 2
-whether a given address is dialable; neither yields a mapping or filtering label, so the cross-check
-can corroborate or contradict a reachability verdict and nothing more.
-
-It measures a different socket. Speaking to those nodes requires a libp2p host, and embedding one in
-the application is the cost this project explicitly avoids, so the cross-check runs as a small
-standalone client on a general-purpose host attached to the same network. It therefore characterizes
-the \emph{network} rather than the transport's own socket, and on cellular it can only be run by
-tethering, which inserts a further translation layer and makes the comparison invalid. We run it on
-Wi-Fi networks and state the cellular gap.
-
-It leaves the testbed. The requests go to public infrastructure that exists to answer them, they are
-protocol-conformant and few, and they are issued by hand rather than by the probe. This is the only
-measurement traffic in the project that is not confined to hardware we control, and it is recorded as
-such.
-
-\subsection{Prevalence estimation}
-\label{sec:prevalence}
-
-A convenience sample of our own handsets cannot be averaged into a prevalence figure directly, but it
-need not be, as NAT behavior is primarily a property of the network path and not of the individual
-subscriber: every customer of one carrier, on the same access point name (APN) and PDN type,
-traverses the same small set of gateway configurations. We therefore characterize each \emph{stratum}
-on the testbed and weight the strata by published population data, accepting that with few
-measurements per stratum the within-stratum variance is not estimable and can only be bounded by
-assumption. This is a stratified census of strata and not a stratified sample, as there is no
-probabilistic sampling within a stratum; no confidence interval is therefore computable, and every
-interval we report is a sensitivity range over assumptions. One subscriber-level determinant survives
-this argument: the handset stack selects the PDN type and whether a translator is present, and since
-Android and iOS differ here, each cellular stratum is measured on at least two handset stacks, one of
-each platform.
-
-\textbf{Cellular strata}: one per carrier, APN and PDN type, and not one per carrier. These strata
-are few and cheap to enumerate, but each carries a large weight, so an undetected error
-inside one is expensive and why each is covered by at least two SIMs and two handset stacks before its
-homogeneity is treated as established. Homogeneity within a carrier remains an assumption, and the
-ways it fails are known: the APN tier, as a consumer prepaid SIM generally cannot reach corporate or
-M2M gateways; the operator arrangement, as a full MVNO runs its own core and NAT and is a separate
-stratum while a light MVNO is not; the regional gateway pool; and the behavior of the address pool
-under exhaustion.
-
-\textbf{Residential strata}: one per ISP and per whether that ISP applies CGNAT to the subscriber,
-with customer-premises equipment vendor and firmware family as a secondary split within the
-non-CGNAT cells only. The ordering matters, as CGNAT above the customer equipment renders that
-equipment unobservable from outside, and as ISP subscriber share is published whereas equipment share
-by firmware family is not. These strata are the weak half, since the number of models, the drift of
-firmware and subscriber-configurable settings make homogeneity within the secondary split a genuine
-assumption; should its weights prove unobtainable, we report residential results as an interval across
-the observed cells, weighting only the ISP and CGNAT axis.
-
-\textbf{Managed and public networks}: university, office and commercial hotspots, characterized as a
-set and carried with a coarse and explicitly uncertain weight.
-
-\textbf{Residual stratum}: tethered clients, whose NAT stacks above the carrier's; VPN and
-private-relay users, who replace the measured path entirely and are over-represented in the
-privacy-conscious population GN attracts; fixed-wireless and satellite broadband, residential in name
-but cellular in mechanism; and enterprise networks. We do not measure it, and carry it at its best
-available weight so that it enters the bound at both extremes and the weight table sums to the
-denominator.
-
-The denominator is consumer-APN mobile lines and residential broadband lines in the countries we
-cover, at the date of measurement, and not devices, humans or GN users. Published subscriber counts
-include machine-to-machine and data-only lines, which we net out where the source permits and flag
-where it does not, and they are cross-checked against per-AS end-user estimates such as APNIC's, which
-sample eyeball users per AS and cannot separate cellular from fixed for a carrier announcing both
-under one ASN. Weights are never taken from the announced address space, which is uncorrelated with
-user population once CGNAT is present.
-
-We report prevalence with its weight table and a sensitivity analysis in four arms: under each
-independent published weighting; under a worst-case and best-case assignment of all unmeasured and
-heterogeneity-uncertain mass to the extremes of the measurand domain, which is the only arm that
-bounds the conclusion; under the assumption that unmeasured strata behave as the worst observed one,
-which is a pessimistic variant and not a bound; and under perturbation of each measured stratum's
-label across the range its homogeneity check observed. We name the dominant envelope and report the
-cellular and residential halves separately. Comparison against published NAT
-and DCUtR measurements~\cite{dcutr} is performed only where the denominators reconcile, as those
-studies estimate over libp2p nodes and traversal attempts and are skewed towards always-on desktop and
-datacenter hosts.
+To estimate how common each behavior is, we group networks into \emph{strata}: networks that share the same NAT configuration, such as one carrier with one APN (access point name, the gateway configuration a phone uses to reach the carrier) and one PDN type (IPv4, IPv6 or both). Each cellular stratum is measured on at least two SIMs and on both Android and iOS. Residential networks are grouped per ISP and whether it uses CGNAT. Strata we cannot measure are carried as a residual. Prevalence is the sum of the strata weighted by published subscriber counts, reported with a sensitivity range and not a confidence interval. This belongs to the follow-on thesis, and this semester produces the per-stratum measurements it needs.
 
 \section{Experiments}
-\label{sec:experiments}
 
-The evaluation is conducted entirely on a testbed under our control, in two tiers. The first tier is a
-synthetic bench whose labels are known by construction, and on which the correctness claim is
-established. The second tier consists of our own handsets, carrying prepaid SIMs across the local
-carriers, moved across the access networks we can physically reach. As the second tier carries no
-labels, we report agreement with the reference implementation rather than accuracy, and treat
-disagreements as a category with hypotheses such as mapping churn during a test, rate limiting at the
-reference server, or multipath.
+\textbf{Bench.} The bench is a set of NAT configurations whose correct labels we know because we built them. We stand up the oracle and at least eight configurations. Linux netfilter, the kernel's packet filter, gives endpoint-independent mapping with its default masquerade rule and address-and-port-dependent mapping with the \code{--random-fully} flag, which picks a fresh port per flow. Address-dependent mapping has no flag, so we write per-destination source NAT in nftables, netfilter's rule language. The bench also spans the three filtering levels and a double NAT, two NATs in series, to imitate a CGNAT. Each configuration is measured by the oracle and by the algorithm with three witnesses in the same window. We record both labels, time to verdict and bytes sent, then repeat the filtering test with the guard off. The result is a confusion matrix (the constructed label against the label returned), the agreement with the oracle, and the contamination bias.
 
-\subsection{Bench validation against a reference implementation}
+\textbf{Witness count.} On the bench we run witnesses at distinct addresses and ports and inject packet loss on the return path. We sweep $k$ and the retry policy against the loss rate and record correct, inconclusive and wrong verdicts. The result is the $k$ and retry policy at which a verdict can be trusted, and what each pattern of disagreement indicates.
 
-\paragraph{Question.} Does the witness-based algorithm recover the mapping and filtering behavior of
-a NAT whose configuration is known by construction, and how does its agreement compare with that of an
-RFC 5780 reference server?
-
-\paragraph{Setup.} A reference server with two public addresses and two ports per family, verified to
-advertise its alternate address and to honour change requests from it. Netfilter spans two of the
-three mapping classes: the default masquerade rule reuses a mapping per source tuple and presents as
-endpoint-independent, while \code{--random-fully} allocates a fresh port per flow and presents as
-address-and-port-dependent. No option produces address-dependent mapping, which is therefore
-constructed with per-destination source NAT through nftables maps; \code{--persistent} controls the
-source address pool and is not on this axis. The bench additionally spans EIF, ADF and APDF filtering,
-two to three commercial routers, and a double-NAT configuration emulating CGNAT.
-
-\paragraph{Procedure.} Each configuration is measured by the reference server and by the
-witness-based algorithm with three honest witnesses, back to back within one window. The
-contamination guard is then disabled and the filtering arm repeated with a punch issued towards the
-witness beforehand, to quantify the bias it prevents.
-
-\paragraph{Measures.} Per-configuration labels from each method against the construction label;
-wall-clock time to verdict; bytes transmitted and received per verdict.
-
-\paragraph{Output.} Confusion matrices against the construction labels for at least eight
-configurations; agreement of the witness-based algorithm with the reference server; and the label
-difference between contaminated and uncontaminated runs.
-
-\subsection{Witness count and failure semantics}
-
-\paragraph{Question.} How many honest witnesses does a confident verdict require, how much of an
-apparent negative is ordinary loss, and does disagreement between vantage points correspond to genuine
-address- or port-dependence?
-
-\paragraph{Setup.} Witness processes on the bench, at distinct addresses and ports, against
-configurations whose filtering behavior is known by construction. Loss is injected on the return path
-at controlled rates.
-
-\paragraph{Procedure.} Sweep the witness count $k$ and the retry policy against injected loss. For each
-configuration, record whether the verdict is correct, inconclusive or wrong, and compare the pattern of
-witness disagreement against the configuration's known dependence on source address and port.
-
-\paragraph{Measures.} Rate of wrong and of inconclusive verdicts per $(k,$ retry policy, loss rate$)$;
-time to verdict; number of dial-back requests per verdict; agreement between vantage points.
-
-\paragraph{Output.} Wrong-verdict and inconclusive rates against $k$ for each loss rate, giving the
-witness count and retry policy at which a verdict becomes trustworthy; the residual probability that an
-open path is reported closed; and a mapping from disagreement patterns onto the filtering classes they
-indicate.
-
-\subsection{Testbed campaign across strata}
-
-\paragraph{Question.} Which values of the measurand occur across the strata of
-Section~\ref{sec:prevalence}, and how stable is each stratum under repetition and under variation of
-the subscriber configuration?
-
-\paragraph{Setup.} The handsets and SIMs of the testbed inventory. Each cellular stratum is covered by
-at least two SIMs differing in plan or operator arrangement, and by at least two handset stacks.
-
-\paragraph{Procedure.} Each stratum is measured on at least two days, spanning a peak and an off-peak
-window, with the screen on and off and the application in the foreground and the background. Roaming
-and handover are triggered manually. Mapping lifetime is probed per network with the announce
-timer quiesced for the duration of the probe.
-
-\paragraph{Measures.} The full measurand per stratum, with the translation path; the pairwise
-agreement between the subscriber configurations within a stratum, which serves as the homogeneity
-check; interface type, radio technology, screen state and application state per record; and agreement
-with the reference server.
-
-\paragraph{Output.} A per-stratum table of the measurand; the homogeneity check per cellular stratum,
-where a disagreement splits the stratum rather than being averaged; the list of strata that were not
-reached, with their population weight, so that the coverage gap is quantified; and the weighted
-prevalence estimate with the four-arm sensitivity analysis of Section~\ref{sec:prevalence}.
-
-\section{Deliverables}
-\label{sec:deliverables}
-
-\begin{itemize}
-  \item The detection algorithm: a specification with its stated assumptions and failure semantics, a
-        reference implementation
-        in \code{grassroots\_networking}, and its validation against the RFC 5780 implementation.
-  \item The classifier itself, as delivered code: the rule that turns a set of dial-back outcomes,
-        each from a friend at a known vantage point, into a mapping and filtering label together with
-        the confidence in it. A specification-level comparison against autoNAT states what each
-        protocol reports and its cost in bytes and round trips per verdict, and a spot cross-check
-        against public autoNAT nodes corroborates the reachability verdict on Wi-Fi networks.
-  \item The testbed dataset: every bench configuration with its construction label and every stratum
-        with its measured tuple, released in full, as these are our own devices on our own SIMs. We
-        check the acceptable-use terms of each plan beforehand, as consumer terms occasionally
-        prohibit network probing.
-  \item Prevalence estimates with the weight table, the denominator, the date of measurement and the
-        sensitivity analysis, cellular reported separately from residential.
-  \item A per-attempt instrumentation subsystem recording the attempt identifier, peer, candidate,
-        address family, path taken, phase timestamps, outcome and failure kind, with a durable sink;
-        the identifier travels on the control messages so that both endpoints' records join.
-  \item A decision rule for the transport, validated by replay on a held-out split.
-  \item A technical report, targeting ANRW or PAM.
-\end{itemize}
-
-The primary claim is the detection algorithm, validated on labeled ground truth and exercised against
-real access networks; the prevalence estimate, the reachability comparison and the decision rule are
-supporting results, and broadening the testbed to further carriers is pursued if time permits. Related
-work is written in the first month and not the last, as a longitudinal DCUtR campaign already covers a
-large number of traversal attempts~\cite{dcutr}, against which our defensible axes, namely cellular
-carriers and CGNAT observed from real handsets and the decentralization of the witness set, must be
-positioned from the outset.
+\textbf{Field.} Our own smartphones with prepaid SIMs are moved across the networks we can reach, each measured on at least two days. There are no known labels there, so we report agreement with the oracle, not accuracy, and categorize every disagreement.
 
 \section{Plan}
-\label{sec:plan}
 
-The project is a one-semester praktikum, on the order of three hundred hours, and the plan below is
-sized for that rather than for a thesis. The scope is the algorithm and its validation; the prevalence
-estimate of Section~\ref{sec:prevalence} is what a follow-on thesis would add, and is described here
-so that the semester's work is built to serve it.
+This is a praktikum, a one-semester supervised project of about 300 hours. The deliverables are the algorithm's specification with a reference implementation, the dataset, and a technical report.
 
 {\footnotesize
-\begin{longtable}{L{1.7cm} L{6.1cm} L{7.0cm}}
+\begin{longtable}{L{1.4cm} L{6.0cm} L{7.4cm}}
 \toprule
-\rowcolor{headerblue}
-\textcolor{white}{\textbf{Weeks}} & \textcolor{white}{\textbf{Work}} &
-\textcolor{white}{\textbf{Exit criterion}} \\
+\textbf{Weeks} & \textbf{Work} & \textbf{Exit criterion} \\
 \midrule
 \endhead
-1--3 & Onboarding: the transport, Dart, RFC 4787 and 5780. A STUN client in Dart, sending from the
-transport's own socket, which requires routing on the STUN magic cookie before the 50-byte discard in
-\code{\_handleRawPacket}. & A reflexive address obtained from a public STUN server over the
-transport's socket, with the demultiplexer change reviewed as production code. This is the
-\textbf{go/no-go checkpoint}: if the socket cannot be shared, the project continues on a separate
-socket and reports the mapping-divergence caveat. \\
-\rowcolor{rowgray}
-4--6 & The oracle and the bench. Deploy coturn on two addresses and two ports; build four to six
-netfilter and nftables configurations spanning the mapping and filtering axes, each labeled by
-construction. & One command runs the oracle against every configuration and emits a confusion matrix
-against the construction labels, with each disagreement explained in writing. The bench and its
-config-to-label mapping reproduce from a clean checkout. \\
-7--10 & The witness protocol: the signaling types, the nonce, retention of every reflection, the send
-history, and the retry and timeout policy. & On the bench, with three friend witnesses, the mapping
-and filtering labels are recovered and reported against the construction labels. Tests demonstrate
-that a dial-back from a contacted endpoint is discarded, that a dial-back is sent only to the observed
-source, and that an unverified packet is not accepted as a dial-back. The contamination effect is
-measured by repeating one arm with the guard disabled. \\
-\rowcolor{rowgray}
-11--13 & Measurement on our own devices, across the networks we can reach: home, university, and one
-or two carriers, plus the standalone autoNAT spot cross-check on the Wi-Fi networks. & Every network
-characterized with the full tuple and the translation path, each measured on at least two days, with
-agreement against the oracle reported and every disagreement categorized. The cross-check is reported
-for the Wi-Fi networks, with the cellular gap stated. Networks that could not be reached are listed
-with the reason. \\
-14--15 & Write-up and artifact. & A report stating the method, the results and the limitations, and
-one script that regenerates every figure from the recorded data. \\
+1--3 & Onboarding. A STUN client in Dart, sending from the transport's own socket. STUN is the protocol by which a device asks a public server which address it appears at. & Public address obtained over that socket. Go/no-go: if the socket cannot be shared, we continue on a separate one and report that the mapping may differ. \\
+4--6 & Oracle and bench. & One command emits the confusion matrix, reproducible from a clean checkout. \\
+7--10 & Witness protocol, nonce, send log and guard, retry policy. & Labels recovered on the bench with three witnesses; contamination bias measured. \\
+11--13 & Field measurement. & All four properties per network, disagreements categorized, unreached networks listed. \\
+14--15 & Write-up. & Report, and one script that regenerates every figure. \\
 \bottomrule
 \end{longtable}
 }
 
-Procurement is the one dependency that cannot be compressed: the two addresses and the firewall rules
-for the oracle, and any SIMs, are ordered in week~1. If the oracle is not available by week~4, the
-bench proceeds against a public RFC 5780 server and the comparison is repeated later.
+\textbf{Hosting.} The oracle needs two public addresses per address family, each reachable on two UDP ports, and must receive unsolicited inbound UDP. A border firewall that drops such packets makes the host useless, so in week~1 we establish whether the university can grant an exception. The alternative is a commercial virtual machine with a second address. Witnesses need distinct addresses, not capacity, so several small hosts in different networks. A campus network is a good place to stand outside a NAT and a poor subject to measure.
 
-\subsection{Hosting the fixed infrastructure}
-\label{sec:hosting}
+\textbf{Emulation.} The bench runs in network namespaces, isolated virtual networks on one always-on Linux machine, driven by Mininet, a tool that builds them, or by plain \code{ip netns}. Mininet provides hosts, links and per-link loss, but not the NAT behaviors; those are still written by hand. An emulated NAT is only the outermost one if the host itself is not behind a NAT, and Docker's default bridge (its virtual switch) masquerades, so masquerading is switched off on it. A multi-node variant runs headless transport nodes, meaning the transport built without the Flutter user interface, each behind a NAT of a different class, befriending one another. Every ordered pair of classes can then be tested, and switching nodes off controls how many friends are online. It needs two code changes: the Flutter imports in seven files under \code{lib/src/transport} and \code{lib/src/signaling} have to go, and the function \code{isGloballyRoutableIPv4}, which tests whether an address is public, has to be replaceable, because it rejects every range an emulated network could use. Emulation reproduces a class of NAT, not a carrier, so the field tier stays on smartphones.
 
-Three components sit outside the handsets, and a university network is a good candidate for all three,
-provided one requirement is met.
+\textbf{Excluded.} Embedding autoNAT in the app, the prevalence estimate, and a rule that decides at dial time whether to punch, request help or abort. A manual check against public autoNAT nodes is reachability only, on Wi-Fi only. It characterizes the network and not our socket, and tethering on cellular would add a translation layer.
 
-The \textbf{oracle} needs two globally routable addresses per family, each reachable on two UDP ports,
-and it must be able to receive unsolicited inbound datagrams on them. This is the requirement that
-decides everything else, as a border firewall that drops unsolicited inbound UDP makes the host
-unusable however many addresses it has. It is worth establishing in week~1 whether such an exception
-can be obtained, and for which ports, because the alternative is a commercial virtual machine with a
-second address purchased.
-
-The \textbf{witnesses} need distinct vantage points rather than capacity. Instances on separate
-subnets give the distinct-address arm of Section~\ref{sec:algorithm}, and a second listening port on
-one of them gives the port arm, so a handful of small hosts on different segments is more valuable
-than one large host.
-
-The \textbf{bench} can be hosted rather than assembled on a desk. Running the netfilter configurations
-inside network namespaces on a single always-on machine makes the topologies reproducible from a
-script, allows nested translation to be built for a double-NAT case, and removes the physical routers
-from the labeled tier, since their policy is observed and not known by construction.
-
-Mininet is a reasonable way to drive those namespaces, and we expect it to be used, but it should be
-adopted for what it actually provides. It supplies the plumbing: hosts as namespaces, links as veth
-pairs, the topology expressed as a Python script, and per-link loss and delay through \code{TCLink},
-which is what the loss injection of Section~\ref{sec:experiments} needs. It does not supply the NAT
-classes. Its built-in NAT node is a plain masquerade, so each class in Section~\ref{sec:measurand}
-still has to be written by hand in netfilter or nftables, and the address-dependent case still has no
-native expression. Plain \code{ip netns} with a set of rule scripts would serve equally well; the
-choice is one of convenience, and it should be recorded as such rather than presented as the source of
-the labels.
-
-Two further points govern how far the emulation can be trusted. First, an emulated NAT is only the
-outermost translation if the host carrying it is itself untranslated: if the machine sits behind a
-campus or home NAT, a remote peer observes the composition of that NAT with ours, and the label we
-constructed is not the label the peer sees. A publicly addressed host is therefore a precondition for
-any run in which the counterpart is outside the emulation, which is the same requirement the oracle
-imposes. Second, and consequently, the labeled tier is cleanest when the counterparts live inside the
-emulation as well: witnesses at distinct emulated addresses and a two-address oracle are trivial to
-provision as further namespaces, and the whole run stays on one machine with nothing traversing a
-network we do not control. Dialing a node outside the emulation belongs to the cross-check of
-Section~\ref{sec:crosscheck}, where the composition caveat is stated.
-
-\subsection{A multi-node testbed}
-\label{sec:multinode}
-
-The emulation is most useful when it holds not one subject but a population. Each node runs in its own
-container, namespace or virtual machine, behind a NAT whose class is set by construction; each runs a
-headless build of the transport and its signaling rather than the full application; the nodes befriend
-one another to form a social graph; and they then run the procedure of Section~\ref{sec:algorithm}
-against each other to establish their own NAT class, their address, and whether they are
-well-connected. Every label is known in advance, for every node, which is what a handset can never
-give us.
-
-The emulation provides three things that handsets cannot. The \emph{pairwise matrix} becomes reachable: with
-one node behind each class, every ordered pair of classes can be exercised, and the interesting cases
-are the asymmetric ones, such as an endpoint-independent node dialing an address-and-port-dependent
-one. \emph{Availability becomes a control variable}, since switching nodes off sweeps the number of
-friends online at an uncontacted vantage point directly, where with handsets it can only be observed.
-And the whole thing is always on, reproducible from a script, and costs no SIMs.
-
-Three prerequisites govern whether it can be built, and all three were checked against the code.
-
-\textbf{A headless build is required, and is closer than it appears.} Seven files under
-\code{lib/src/transport} and \code{lib/src/signaling} import Flutter, which would prevent the node
-from running in a container. Four of them import only \code{foundation.dart}, for \code{debugPrint}.
-The remaining coupling is presentation metadata rather than structure: \code{udp\_transport\_service}
-pulls in \code{material.dart} solely for a \code{TransportDisplayInfo} constant naming an icon and a
-color, and the BLE transport does the same. Moving that metadata to the interface layer and replacing
-\code{debugPrint} with a logger is a small refactor, not a port, and \code{bootstrap\_anchor/} is
-already a Flutter-free binary that shows the shape. BLE is not needed on these nodes in any case.
-
-\textbf{The routability predicate needs a test seam, and without one the experiment measures nothing.}
-\code{isGloballyRoutableIPv4} excludes every address range an emulated network could legitimately use:
-the private ranges, the CGNAT range, the documentation ranges, and \code{198.18.0.0/15}, which is the
-benchmarking range reserved for exactly this purpose. Since \code{isWellConnected} is that predicate
-applied to the advertised address, every node in an emulated network would classify itself as not
-well-connected, no node would ever act as a facilitator, and the property under study would never
-arise. The predicate must therefore be injectable, or a testbed mode must treat a configured prefix as
-routable. This is a small change and it belongs in the first weeks, since nothing else in the testbed
-works until it is made.
-
-\textbf{The substrate must not add a translation of its own.} Docker's default bridge masquerades, so
-its NAT composes with the constructed one and the label stops being the label; the bridges must be
-created with masquerading disabled, or the veth pairs wired by hand. This is the composition caveat
-above, in the form it takes on a container host.
-
-On substrate, a campus host running containers or Mininet is the cheaper option and is sufficient for
-the labeled tier, given the seam above. Containernet runs Docker containers as Mininet hosts, and
-gives both the images and the link shaping. Cloud virtual machines buy
-one thing the campus host does not: a genuinely public address for a node that is supposed to be
-well-connected, and for the oracle. What they do not buy is configurable NAT behavior, since a
-provider's managed NAT is a fixed product rather than a knob across the RFC 4787 matrix, so the
-classes would still come from a router instance running our own rules. The reasonable split is
-therefore the emulated population on the campus host, with a public address obtained wherever it is
-easiest for the nodes and the oracle that must be reachable from outside.
-
-What the emulation cannot supply is the behavior of a real carrier: pool exhaustion under load, the
-differences between one operator's APNs, and the quirks of a particular gateway generation are outside
-its reach. It reproduces a \emph{class} and not a network, so the field tier remains the handsets.
-
-A campus network is an
-excellent place to stand \emph{outside} a NAT and a poor subject to measure, since university
-allocations are typically large enough that wired hosts are publicly addressed and not translated at
-all. The subjects of the measurement remain the handsets on carrier and residential paths; what the
-institution supplies is the vantage points they are measured against. Campus wireless, the guest
-network and the institutional VPN are separate matters, as each is a genuine access network with its
-own policy and each is worth characterizing in its own right.
-
-\subsection{What this project excludes}
-
-Three items that belong to the research question are outside a semester and are named here so that
-their absence is a decision and not an oversight. The \textbf{autoNAT sidecar} is removed, as
-embedding the reference implementation in the application is a project of its own; the protocol
-comparison is specification-level, and the external corroboration is the standalone spot cross-check
-of Section~\ref{sec:crosscheck} and not an in-app baseline. The \textbf{prevalence estimate} and its weighting and sensitivity
-analysis are follow-on work; this semester produces the per-stratum measurements it would consume.
-And the \textbf{decision rule} for the transport is left to that follow-on, as fitting it needs more
-networks than a semester will reach.
-
-\subsection{What counts as success}
-
-The project succeeds if the work is done properly and reported honestly, and not if a particular
-number comes out. Concretely: the probe is implemented and sends from the transport's own socket, or
-the reason it cannot is documented; the bench is reproducible and its labels are known by
-construction; the witness algorithm's agreement with the oracle is measured and every disagreement is
-explained; the contamination guard's effect is quantified; and the limitations are stated. A result in
-which the witness approach agrees poorly with the oracle is a finding, and is written up as one: it
-would tell us that friends are not a sufficient substitute for designated servers, which is precisely
-what the project set out to determine.
-
-Excellent work is distinguished by what it adds beyond that: a characterization of \emph{why} the
-disagreements occur, a retry and timeout policy derived from measured loss rather than assumed, or
-coverage of a carrier whose behavior was not anticipated.
+\textbf{Success} means the work is done properly and reported honestly. If the witness approach agrees poorly with the oracle, that is a finding: friends are not a sufficient substitute for designated servers.
 
 \section{Prerequisites and open decisions}
 
-We expect basic mobile application development, basic networking, and familiarity with statistics and
-a plotting library; experience with a peer-to-peer stack is an advantage. Dart is learned in the first
-weeks, and the onboarding checkpoint exists to make that concrete rather than assumed. The student
-needs a Linux host for the bench, two publicly routable addresses for the oracle, at least one Android
-and one iOS handset, and any SIMs the measurement is to cover.
-
-Five decisions are taken before the work begins. First, ownership of the UDX fork: the send history
-behind the contamination guard cannot see UDX's own retransmissions and keepalives, as the fork
-exposes a receive hook but no general send hook, so either the student is given a path override and
-the right to publish a patched fork, or the guard is defined over the sends the application controls
-and the residual is reported as a limitation. Second, whether the probe shares the transport socket,
-which the week-3 checkpoint answers, and what is reported if it cannot. Third, who hosts the fixed infrastructure. It has
-three roles and one hard requirement, set out in Section~\ref{sec:hosting}. Fourth, whether to open an IPv4 rule on the deployed rendezvous
-anchor, whose data-plane rule today admits \code{udp:9516} from \code{::/0} and is therefore IPv6
-only, which excludes the IPv4-only CGNAT population the study targets. Fifth, the measurement budget:
-each carrier is a candidate stratum, but each SIM covers only one combination of carrier, APN and
-plan.
-
-We note separately that the unvalidated punch target, the absence of rate limiting on the signaling
-path, the uncorroborated address reflection and the unbounded length field in the stream framer are
-defects in the current implementation, independent of this project, and that their assignment should
-be settled in advance.
-
-\section*{Glossary}
-
-\begin{description}[leftmargin=0pt, style=nextline, itemsep=0.2em]
-  \item[464XLAT] A mechanism allowing IPv4-only applications to operate over an IPv6-only mobile network, by
-        translating on the handset and again in the carrier network. Android and iOS differ in their
-        support, so the handset stack can change what a measurement observes.
-  \item[APN] The named gateway configuration a mobile device uses to reach the packet core. Prepaid,
-        postpaid, corporate and machine-to-machine plans frequently use different ones, and therefore
-        potentially different NAT behavior on the same carrier.
-  \item[autoNAT] A libp2p service in which a node asks other nodes to dial it back to determine whether it is
-        publicly reachable, per address and with a nonce in version 2. Both versions rely in practice
-        on well-known dial-back servers, and neither classifies NAT behavior.
-  \item[CGNAT] Network address translation applied by an ISP, typically a mobile carrier, sharing one public
-        IPv4 address among many subscribers, so that even the public address is shared.
-  \item[Dial-back] A request from peer A that peer B attempt a connection back to A, whose success establishes
-        that A is reachable from outside.
-  \item[Filtering behavior] Which inbound traffic a NAT admits on an existing mapping: endpoint-independent,
-        address-dependent, or address-and-port-dependent. Determining it requires a packet from an
-        endpoint never contacted.
-  \item[Hole punching] Two peers behind NATs transmit towards each other simultaneously, so that each NAT admits
-        the reply to traffic it has already seen. It generally fails against address-and-port-dependent
-        mapping.
-  \item[Mapping behavior] How a NAT allocates the external port for outbound traffic: the same port for every
-        destination, or a fresh one per destination, in which case no peer can predict where to send.
-  \item[Mapping lifetime] How long a NAT retains an idle mapping, which determines the keepalive interval required
-        to hold a path open.
-  \item[MVNO] An operator reselling service on another operator's network. A full MVNO runs its own packet
-        core and NAT and is a separate stratum; a light MVNO is not.
-  \item[Port preservation] Whether a NAT retains the internal source port as the external one, in which case the
-        address a device guesses from its own local port is correct.
-  \item[RFC 4787, RFC 5780] The former defines NAT behavioral terminology and requirements, the latter the tests
-        that discover that behavior from outside, using a server with two addresses and two ports.
-  \item[STUN] A protocol by which a peer asks a public server which address it appears to originate from. GN
-        has no STUN client, and \code{ADDR\_REFLECT} is its nearest equivalent.
-  \item[UDX] The reliable multiplexed stream protocol over UDP used for the Internet relation, consumed as
-        a fork published as \code{grassroots\_dart\_udx}.
-\end{description}
+Basic mobile development, basic networking, and statistics. Dart is learned in the first weeks. The student needs a Linux host, two public addresses, an Android and an iOS smartphone, and any SIMs the measurement covers. Four decisions are taken before the work begins:
+\begin{itemize}
+  \item Whether the probe sends from the transport's own socket. The week-3 checkpoint answers it. If not, a separate socket is used and the mapping caveat is reported.
+  \item Who hosts the oracle and the witnesses.
+  \item Whether to open IPv4 on the deployed rendezvous anchor, the always-on server that introduces peers to each other. Its rule admits \code{udp:9516} from \code{::/0} only, which is IPv6 only and excludes the IPv4-only CGNAT population we study.
+  \item The SIM budget. One SIM covers one combination of carrier, APN and plan.
+\end{itemize}
 
 \begin{thebibliography}{9}
 \bibitem{Jennings2005} C. Jennings. NAT Classification Test Results. IETF Internet-Draft, 2005.
@@ -855,3 +157,4 @@ be settled in advance.
 \end{thebibliography}
 
 \end{document}
+

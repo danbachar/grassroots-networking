@@ -1,7 +1,7 @@
-// Ten-slide talk deck for the NAT student project.
+// Eight-slide talk deck for the NAT student project.
 // Build:  NODE_PATH=<dir with pptxgenjs> node build-deck.js
 // Density rule for this deck: at most four body lines per slide, at most
-// twelve words per line. The detail lives in the speaker notes and in
+// twelve words per line. The detail lives in
 // nat-project.pdf, not on the slide.
 
 const pptxgen = require('pptxgenjs');
@@ -23,7 +23,7 @@ const W = 13.3, M = 0.75, CW = W - 2 * M;
 const p = new pptxgen();
 p.layout = 'LAYOUT_WIDE';
 p.author = 'Dan Bachar';
-p.title = 'NAT detection and hole punching';
+p.title = 'NAT Topology and Hole-Punching Survey';
 
 function title(s, text, kicker, dark) {
   if (kicker) {
@@ -87,11 +87,11 @@ function card(s, o) {
     x: M, y: 2.3, w: 8.4, h: 0.3, margin: 0,
     fontFace: BODY, fontSize: 12, bold: true, charSpacing: 2, color: TEAL,
   });
-  s.addText('NAT detection and\nhole punching', {
+  s.addText('NAT Topology and Hole-Punching Survey', {
     x: M, y: 2.8, w: 8.4, h: 1.8, margin: 0,
     fontFace: HEAD, fontSize: 44, bold: true, color: WHITE, lineSpacingMultiple: 0.95,
   });
-  s.addText('Determining NAT behavior from the social graph, without designated servers', {
+  s.addText('Grassroots approach to classifying NATs', {
     x: M, y: 4.75, w: 8.4, h: 0.4, margin: 0, fontFace: BODY, fontSize: 16, color: 'B7C4CC',
   });
   s.addText([
@@ -99,38 +99,36 @@ function card(s, o) {
     { text: '   ·   dan.bachar@campus.technion.ac.il', options: { color: MUTED } },
   ], { x: M, y: 6.4, w: 8.4, h: 0.35, margin: 0, fontFace: BODY, fontSize: 13 });
 
-  s.addNotes('Six months, one student, inside grassroots_networking. The deliverable is the detection algorithm, validated on a testbed we control; the prevalence measurement follows from the same campaign.');
 }
 
 // ============================================================ 2 · current path
 {
   const s = p.addSlide();
-  title(s, 'The current IP path', 'Implementation today', false);
+  title(s, 'Well-connected devices', 'Who can facilitate', false);
 
-  const steps = ['Learn address', 'Announce', 'Pick one candidate', 'Punch', 'Dial UDX'];
-  const cw = 2.15, gap = 0.28;
+  const steps = ['Register address with a well-connected friend', 'Ask it for the other peer\u2019s address', 'It tells both sides to punch at once', 'The peers talk directly'];
+  const cw = 2.65, gap = 0.4;
   steps.forEach((t, i) => {
     const x = M + i * (cw + gap);
-    card(s, { x, y: 2.35, w: cw, h: 1.0 });
+    card(s, { x, y: 2.35, w: cw, h: 1.1 });
     s.addText(t, {
-      x: x + 0.12, y: 2.35, w: cw - 0.24, h: 1.0, margin: 0,
+      x: x + 0.12, y: 2.35, w: cw - 0.24, h: 1.1, margin: 0,
       fontFace: HEAD, fontSize: 14, bold: true, color: INK, align: 'center', valign: 'middle',
     });
     if (i < steps.length - 1) {
       s.addText('→', {
-        x: x + cw, y: 2.35, w: gap, h: 1.0, margin: 0,
+        x: x + cw, y: 2.35, w: gap, h: 1.1, margin: 0,
         fontFace: BODY, fontSize: 16, bold: true, color: MUTED, align: 'center', valign: 'middle',
       });
     }
   });
 
   lines(s, [
-    'We advertise the discovered public IP with our own local port.',
-    'One candidate, one attempt, ten-second timeout, no fallback.',
-    'No timestamps and no failure reason: neither outcome teaches us anything.',
+    'Well-connected: has a public address, so anyone can reach it.',
+    'It facilitates between mutual friends by passing on addresses, as well as coordinating punching.',
+    'Today simple private address regex decides who qualifies: we replace it with an algorithmic test.',
   ], { y: 4.3, size: 17 });
 
-  s.addNotes('Two wildcard sockets on port 0, so the port changes on every rebind. The mapped port is only ever learned from ADDR_REFLECT, which needs a session that already works — no use for a first contact. The ten-second announce doubles as the de facto NAT keepalive.');
 }
 
 // ============================================================ 3 · NAT behavior
@@ -138,9 +136,9 @@ function card(s, o) {
   const s = p.addSlide();
   title(s, 'NAT behavior', 'What we must distinguish', false);
 
-  const colX = [M, M + 4.0, M + 6.9];
-  const colW = [3.8, 2.7, CW - 6.9];
-  ['Behavior', 'Example', 'Effect on hole punching'].forEach((h, i) => {
+  const colX = [M, M + 2.75, M + 4.45, M + 7.7, M + 9.8];
+  const colW = [2.6, 1.55, 3.05, 1.95, CW - 9.8];
+  ['Behavior', 'Example', 'Effect on hole punching', 'AutoNAT', 'Reachability'].forEach((h, i) => {
     s.addText(h.toUpperCase(), {
       x: colX[i], y: 2.15, w: colW[i], h: 0.3, margin: 0,
       fontFace: BODY, fontSize: 10, bold: true, charSpacing: 1.5, color: MUTED,
@@ -148,115 +146,127 @@ function card(s, o) {
   });
 
   const rows = [
-    ['Endpoint-independent', 'most home routers', 'One external port for every destination. Punching works.', TEAL],
-    ['Address-dependent', 'some enterprise NATs', 'A new port per destination address. Both sides must punch.', TEAL],
-    ['Address-and-port-dependent', 'many mobile carriers', 'A new port per endpoint. Punching fails without prediction.', AMBER],
-    ['Carrier-grade NAT', 'prepaid mobile data', 'Stacked above all of it. No unsolicited inbound at all.', AMBER],
+    ['Endpoint-independent', 'formerly: cone', 'home routers', 'One external port for every destination. Punching works.', 'EndpointIndependent', 'Public if filtering is open, else Private', TEAL],
+    ['Address-dependent', 'formerly: no name', 'enterprise NATs', 'A new port per destination address. Both sides must punch.', 'EndpointDependent', 'Private', TEAL],
+    ['Address-and-port-dependent', 'formerly: symmetric', 'mobile carriers', 'A new port per endpoint. Punching fails without prediction.', 'EndpointDependent', 'Private', AMBER],
+    ['Carrier-grade NAT', '', 'mobile carriers', 'Sits on top of the others. Nothing unsolicited gets in.', 'no name', 'Private', AMBER],
   ];
-  rows.forEach(([b, ex, eff, color], i) => {
-    const y = 2.55 + i * 0.92;
-    if (i % 2 === 0) card(s, { x: M - 0.15, y: y - 0.06, w: CW + 0.3, h: 0.84, fill: 'F6F9F9' });
-    s.addText(b, {
-      x: colX[0], y, w: colW[0], h: 0.72, margin: 0,
-      fontFace: HEAD, fontSize: 15, bold: true, color, valign: 'middle',
-    });
+  rows.forEach(([b, old, ex, eff, an, reach, color], i) => {
+    const y = 2.55 + i * 0.8;
+    if (i % 2 === 0) card(s, { x: M - 0.15, y: y - 0.05, w: CW + 0.3, h: 0.74, fill: 'F6F9F9' });
+    s.addText([
+      { text: b, options: { fontFace: HEAD, fontSize: 13, bold: true, color, breakLine: !!old } },
+      ...(old ? [{ text: old, options: { fontFace: BODY, fontSize: 11, italic: true, color: MUTED } }] : []),
+    ], { x: colX[0], y, w: colW[0], h: 0.64, margin: 0, valign: 'middle' });
     s.addText(ex, {
-      x: colX[1], y, w: colW[1], h: 0.72, margin: 0,
-      fontFace: BODY, fontSize: 13, italic: true, color: MUTED, valign: 'middle',
+      x: colX[1], y, w: colW[1], h: 0.64, margin: 0,
+      fontFace: BODY, fontSize: 12, italic: true, color: MUTED, valign: 'middle',
     });
     s.addText(eff, {
-      x: colX[2], y, w: colW[2], h: 0.72, margin: 0,
-      fontFace: BODY, fontSize: 14.5, color: '3E4C57', valign: 'middle',
+      x: colX[2], y, w: colW[2], h: 0.64, margin: 0,
+      fontFace: BODY, fontSize: 12, color: '3E4C57', valign: 'middle',
+    });
+    s.addText(an, {
+      x: colX[3], y, w: colW[3], h: 0.64, margin: 0,
+      fontFace: 'Courier New', fontSize: 11, bold: true, color: INK, valign: 'middle',
+    });
+    s.addText(reach, {
+      x: colX[4], y, w: colW[4], h: 0.64, margin: 0,
+      fontFace: BODY, fontSize: 12, bold: true, color: INK, valign: 'middle',
     });
   });
 
-  s.addText('We measure the tuple — mapping, filtering, port preservation, lifetime — never a single type.', {
-    x: M, y: 6.35, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
+  s.addText([
+    'We measure four properties: ',
+    '1. Mapping: which external port the NAT assigns. ',
+    '2. Filtering: which senders it lets in. ',
+    '3. Port preservation: whether it keeps our own port.',
+    '4. Lifetime: how long it keeps an idle mapping. ',
+    'AutoNAT also reports reachability (Public, Private or Unknown)',
+  ].map((t, k, arr) => ({ text: t, options: { breakLine: k < arr.length - 1 } })), {
+    x: M, y: 5.85, w: CW, h: 1.3, margin: 0, fontFace: BODY, fontSize: 12, italic: true, color: TEAL_DK, valign: 'top',
   });
 
-  s.addNotes('Filtering is the second axis: which inbound traffic is admitted on an existing mapping, endpoint-independent through address-and-port-dependent. Mapping decides whether a port can be predicted at all; filtering decides whether the arriving packet is let through. Port preservation is why the current code sometimes works by accident, and mapping lifetime sets the keepalive interval.');
 }
 
 // ============================================================ 4 · self-classification (dark emphasis)
 {
   const s = p.addSlide();
   s.background = { color: INK };
-  title(s, 'Self-classification', 'One boolean', true);
+  title(s, 'Self-classification', 'An address range test', true);
 
   card(s, { x: M, y: 2.3, w: 5.6, h: 1.5, fill: INK_SOFT });
-  s.addText('isWellConnected = true', {
+  s.addText('not 10.* | 192.168.* | ...', {
     x: M + 0.4, y: 2.55, w: 4.8, h: 0.45, margin: 0,
-    fontFace: 'Courier New', fontSize: 20, bold: true, color: WHITE,
+    fontFace: 'Courier New', fontSize: 14, bold: true, color: WHITE,
   });
-  s.addText('A routability test over the advertised string.', {
-    x: M + 0.4, y: 3.05, w: 4.8, h: 0.35, margin: 0, fontFace: BODY, fontSize: 13, color: '93A4AE',
+  s.addText('Well-connected if the advertised address is in none of the private or reserved ranges.', {
+    x: M + 0.4, y: 3.05, w: 4.8, h: 0.6, margin: 0, fontFace: BODY, fontSize: 13, color: '93A4AE', valign: 'top',
   });
 
   card(s, { x: M + 6.0, y: 2.3, w: 5.8, h: 1.5, fill: '3A2A22' });
-  s.addText('A CGNAT handset passes it', {
+  s.addText('A phone behind carrier NAT passes it', {
     x: M + 6.4, y: 2.55, w: 5.0, h: 0.35, margin: 0,
     fontFace: HEAD, fontSize: 17, bold: true, color: 'E9A876',
   });
-  s.addText('It never sees its own inner address.', {
+  s.addText('It advertises the carrier\u2019s public address, so it looks reachable.', {
     x: M + 6.4, y: 3.0, w: 5.0, h: 0.4, margin: 0, fontFace: BODY, fontSize: 13, color: 'D8C3B4',
   });
 
   lines(s, [
-    'The punch is then suppressed for the peers that need it.',
-    'The device reflects addresses and mediates for its friends.',
-    'Having a public address is not being reachable at it.',
+    'Hole punching is skipped despite CGNAT not allowing unsolicited incoming requests.',
+    'Peer is considered well-connected, although nobody can reach it.',
+    'A public address does not mean peer can be reached.',
   ], { y: 4.5, size: 17, dark: true, dot: AMBER });
 
-  s.addNotes('Confirmed in source at grassroots_network.dart:3369. This is the clearest motivation for the project: the system cannot distinguish a public address from a reachable one, and every consequence follows from that.');
 }
 
 // ============================================================ 5 · the idea
 {
   const s = p.addSlide();
-  title(s, 'Witness-based detection', 'The idea', false);
+  title(s, 'Witness-based detection', 'The algorithm', false);
 
-  // Probe at left; three friends at right, each dialing back from its own vantage point.
-  const px = M + 0.4, py = 3.15;
-  s.addShape(p.ShapeType.roundRect, {
-    x: px, y: py, w: 2.5, h: 1.1, rectRadius: 0.06,
-    fill: { color: PANEL }, line: { color: TEAL, width: 1.4 },
-  });
-  s.addText('Probe', { x: px, y: py + 0.2, w: 2.5, h: 0.36, margin: 0, fontFace: HEAD, fontSize: 17, bold: true, color: INK, align: 'center' });
-  s.addText('the device', { x: px, y: py + 0.58, w: 2.5, h: 0.3, margin: 0, fontFace: BODY, fontSize: 12, color: MUTED, align: 'center' });
-
-  const friends = [
-    ['Friend A', 'session open', TEAL, 2.15],
-    ['Friend B', 'new source port', TEAL, 3.35],
-    ['Friend C', 'never contacted', AMBER, 4.55],
+  // Left: the algorithm, five numbered steps. Right: the probe and the three
+  // friends it uses. A friend has one UDP link to the probe, so one source
+  // address and one port. A and B are linked (teal); C is not (amber).
+  const steps = [
+    'Pick A, a well-connected friend we have a link to; B, a linked friend; C, a friend of A with no link to us.',
+    'A and B report the address and port they see us at.',
+    'Ask A to start a punch between us and C. A gives C our address as A saw it. We send nothing.',
+    'C\u2019s punch packets, carrying its key, arrive: anyone can reach us. Not after retries: filtering is endpoint-dependent.',
+    'A and B saw one port: mapping is endpoint-independent. Two ports: endpoint-dependent.',
   ];
-  friends.forEach(([n, sub, color, y]) => {
-    const fx = M + 8.3;
+  const sw = 7.4;
+  steps.forEach((t, i) => {
+    const y = 2.3 + i * 0.92;
+    s.addShape(p.ShapeType.ellipse, {
+      x: M, y: y + 0.08, w: 0.42, h: 0.42,
+      fill: { color: i < 3 ? TEAL : AMBER }, line: { color: i < 3 ? TEAL : AMBER, width: 0 },
+    });
+    s.addText(String(i + 1), {
+      x: M, y: y + 0.08, w: 0.42, h: 0.42, margin: 0,
+      fontFace: HEAD, fontSize: 14, bold: true, color: WHITE, align: 'center', valign: 'middle',
+    });
+    s.addText(t, {
+      x: M + 0.65, y, w: sw - 0.65, h: 0.6, margin: 0,
+      fontFace: BODY, fontSize: 16, color: '3E4C57', valign: 'middle',
+    });
+  });
+
+  const fx = M + 8.3, fw = CW - 8.3;
+  const node = (y, h, name, sub, color) => {
     s.addShape(p.ShapeType.roundRect, {
-      x: fx, y, w: 3.3, h: 0.95, rectRadius: 0.06,
+      x: fx, y, w: fw, h, rectRadius: 0.06,
       fill: { color: PANEL }, line: { color, width: 1.3 },
     });
-    s.addText(n, { x: fx + 0.15, y: y + 0.14, w: 3.0, h: 0.32, margin: 0, fontFace: HEAD, fontSize: 15, bold: true, color: INK });
-    s.addText(sub, { x: fx + 0.15, y: y + 0.48, w: 3.0, h: 0.3, margin: 0, fontFace: BODY, fontSize: 11.5, color });
-    const x1 = px + 2.5, y1 = py + 0.55;      // probe, right edge
-    const x2 = fx, y2 = y + 0.475;            // friend, left edge
-    s.addShape(p.ShapeType.line, {
-      x: x1, y: Math.min(y1, y2), w: x2 - x1, h: Math.abs(y2 - y1),
-      line: { color, width: 1.4, beginArrowType: 'triangle' },
-      flipV: y2 < y1,
-    });
-  });
-  s.addText('each dial-back carries the nonce', {
-    x: px, y: py + 1.3, w: 2.5, h: 0.3, margin: 0,
-    fontFace: BODY, fontSize: 11.5, color: MUTED, align: 'center',
-  });
+    s.addText(name, { x: fx + 0.15, y: y + 0.12, w: fw - 0.3, h: 0.32, margin: 0, fontFace: HEAD, fontSize: 15, bold: true, color: INK });
+    s.addText(sub, { x: fx + 0.15, y: y + 0.46, w: fw - 0.3, h: 0.3, margin: 0, fontFace: BODY, fontSize: 11.5, color });
+  };
+  node(2.3, 0.9, 'Probe', 'the phone under test', INK_SOFT);
+  node(3.45, 0.9, 'Friend A', 'linked, well-connected; reports, signals', TEAL);
+  node(4.6, 0.9, 'Friend B', 'linked, another address; reports', TEAL);
+  node(5.75, 0.9, 'Friend C', 'no link; punches toward us', AMBER);
 
-  lines(s, [
-    'Only friends. The probe asks each of them directly.',
-    'They dial back from different addresses and ports.',
-    'A nonce in each reply makes a fabricated dial-back impossible.',
-  ], { y: 5.75, size: 16.5, step: 0.44 });
-
-  s.addNotes('Reflections from friends at distinct addresses give mapping behavior. Filtering follows from where the dial-backs come from, classified against our own send history: a friend we have a session with, the same friend on a fresh source port, and a friend we have never transmitted to. No friend is ever asked to dial anyone but us, so there is no amplification vector and no relaying for non-friends, which the signaling design forbids anyway.');
 }
 
 // ============================================================ 6 · the algorithm
@@ -281,53 +291,48 @@ function card(s, o) {
     });
   };
 
-  half(M, 5.5, 'Reflect', 'each friend reports the source it observed', [
-    ['Same tuple from every friend', 'endpoint-independent'],
-    ['Differs by friend address', 'address-dependent'],
-    ['Differs across two ports of one friend', 'address-and-port-dependent'],
-  ], TEAL);
-
-  half(M + 6.3, 5.5, 'Dial back', 'three sources, each carrying the nonce', [
-    ['Arrives from an uncontacted address', 'endpoint-independent'],
-    ['Only from a contacted address, new port', 'address-dependent'],
-    ['Only from the contacted endpoint', 'address-and-port-dependent'],
+  half(M + 6.3, 5.5, 'Dial back', 'filtering: A tells C to punch toward us; we send nothing', [
+    ['C\u2019s packets arrive: anyone can reach us', 'endpoint-independent'],
+    ['They do not, after retries via more friends', 'endpoint-dependent'],
+    ['A\u2019s packet always arrives; it proves only the link', 'no verdict'],
   ], AMBER);
 
-  s.addText('Three friends with the right vantage points separate every class. More buy confidence against loss, not resolution.', {
-    x: M, y: 6.2, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 14.5, italic: true, color: TEAL_DK,
+  half(M, 5.5, 'Reflect', 'mapping: A and B report the port they saw us at', [
+    ['Both saw the same port', 'endpoint-independent'],
+    ['They saw different ports', 'endpoint-dependent'],
+    ['Address- or port-dependent? One source per friend cannot tell', 'oracle only'],
+  ], TEAL);
+
+  s.addText('Friends separate independent from dependent, the split autoNAT reports. The finer split needs the oracle.', {
+    x: M, y: 6.2, w: CW, h: 0.6, margin: 0, fontFace: BODY, fontSize: 14.5, italic: true, color: TEAL_DK, valign: 'top',
   });
 
-  s.addNotes('Left column is mapping, right is filtering. An arrival is definitive and ends that arm; an absence is retried before it is recorded, because under honest peers an absent dial-back is equally consistent with filtering and with loss. The minimum witness set is combinatorial: two friends at distinct addresses separate endpoint-independent from address-dependent mapping, one friend reachable on two ports separates address-and-port-dependent, and one friend never transmitted to gives the endpoint-independent filtering test. The measurand and the procedure are RFC 4787 and 5780; the dial-back is from autoNAT, which is a libp2p spec and not an RFC; the friends are ours.');
 }
 
 // ============================================================ 7 · validity threats
 {
   const s = p.addSlide();
-  title(s, 'Two things that mislead', 'Under honest peers', false);
+  title(s, 'Two things that mislead', 'A false yes and a false no', false);
 
   card(s, { x: M, y: 2.3, w: 5.7, h: 2.9 });
   s.addShape(p.ShapeType.ellipse, { x: M + 0.4, y: 2.6, w: 0.4, h: 0.4, fill: { color: AMBER }, line: { color: AMBER, width: 0 } });
-  s.addText('Contamination', { x: M + 0.4, y: 3.15, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 20, bold: true, color: INK });
+  s.addText('False yes: contamination', { x: M + 0.4, y: 3.15, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 20, bold: true, color: INK });
   lines(s, [
-    'Witnesses are the peers we already transmit to.',
-    'It measures our own mapping, not the NAT rule.',
-    'Guard: a per-test send history discards contacted sources.',
+    'If we ever sent to C, our packets opened the hole.',
+    'The normal punch sends from both sides. We send nothing.',
+    'Guard: log where we sent; ignore punches from there.',
   ], { x: M + 0.4, w: 4.9, y: 3.65, size: 13.5, step: 0.42, dot: AMBER });
 
   card(s, { x: M + 6.1, y: 2.3, w: 5.7, h: 2.9 });
   s.addShape(p.ShapeType.ellipse, { x: M + 6.5, y: 2.6, w: 0.4, h: 0.4, fill: { color: TEAL }, line: { color: TEAL, width: 0 } });
-  s.addText('Absent dial-backs', { x: M + 6.5, y: 3.15, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 20, bold: true, color: INK });
+  s.addText('False no: loss', { x: M + 6.5, y: 3.15, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 20, bold: true, color: INK });
   lines(s, [
-    'An arriving dial-back is definitive: the path exists.',
-    'An absent one is filtering, or simply loss.',
-    'Negative verdicts need retries and k witnesses.',
+    'Arrival is proof. Absence is not: the packet may be lost.',
+    'Or C was offline, or A did not pass the request on.',
+    'Retry, then ask A for another C, before recording no.',
   ], { x: M + 6.5, w: 4.9, y: 3.65, size: 13.5, step: 0.42 });
 
-  s.addText('We assume peers are honest. Relaxing that assumption is follow-on work.', {
-    x: M, y: 5.6, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
-  });
 
-  s.addNotes('Contamination is the one that would quietly invalidate a field campaign: it biases in the direction that looks like good news. We publish the label difference between contaminated and clean runs as a result in its own right. The nonce survives the honesty assumption for a different reason: the peers are honest but the network is not, and an off-path party could otherwise inject something resembling a dial-back. Disagreement between witnesses is diagnostic here, not malicious: it usually means the behavior genuinely depends on the source address or port.');
 }
 
 // ============================================================ 8 · testbed and hosting
@@ -338,91 +343,35 @@ function card(s, o) {
   card(s, { x: M, y: 2.3, w: 5.7, h: 3.0 });
   s.addText('What we measure', { x: M + 0.4, y: 2.6, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 19, bold: true, color: INK });
   lines(s, [
-    'Our own handsets, on carrier and home paths.',
-    'A stratum: one carrier, APN and PDN type.',
-    'Two SIMs and two handset stacks per carrier.',
+    'Our own smartphones, on carrier and home paths.',
+    'A group: one carrier, one kind of plan.',
+    'Two SIMs and Android plus iOS per carrier.',
   ], { x: M + 0.4, w: 4.9, y: 3.2, size: 13.5, step: 0.52 });
 
   card(s, { x: M + 6.1, y: 2.3, w: 5.7, h: 3.0 });
   s.addText('What the institution hosts', { x: M + 6.5, y: 2.6, w: 4.9, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 19, bold: true, color: INK });
   lines(s, [
-    'Oracle: two addresses, two ports, inbound UDP.',
-    'Witnesses: small hosts on separate subnets.',
-    'Bench: netfilter inside network namespaces.',
+    'Oracle: a reference NAT-test server.',
+    'Witnesses: small hosts, different networks.',
+    'Bench: fake NATs built on one Linux machine.',
   ], { x: M + 6.5, w: 4.9, y: 3.2, size: 13.5, step: 0.52, dot: AMBER });
 
-  s.addText('A campus is a good place to stand outside a NAT and a poor subject to measure.', {
-    x: M, y: 5.7, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 15, italic: true, color: TEAL_DK,
-  });
 
-  s.addNotes('The requirement that decides whether a host can serve is whether it may receive unsolicited inbound UDP on those ports; a border firewall that drops them makes the host unusable however many addresses it has, so it is a week-one question for IT. University wired hosts are usually publicly addressed rather than translated, which is why the campus supplies the vantage points while the handsets remain the subjects. Campus wireless, guest and VPN are separate access networks, worth characterizing on their own terms.');
 }
 
-// ============================================================ 9 · plan
-{
-  const s = p.addSlide();
-  title(s, 'One semester', 'Sequence', false);
-
-  const phases = [
-    ['Weeks 1\u20133', 'Onboarding; a STUN client on the transport\u2019s own socket.', 'go/no-go checkpoint', TEAL],
-    ['Weeks 4\u201310', 'The oracle and labeled bench; then the protocol and its classifier.', 'labels known by construction', TEAL],
-    ['Weeks 11\u201315', 'Measurement across the networks we can reach; write-up.', 'agreement, never accuracy', AMBER],
-  ];
-  phases.forEach(([when, what, note, color], i) => {
-    const y = 2.6 + i * 1.3;
-    s.addShape(p.ShapeType.roundRect, {
-      x: M, y, w: 2.5, h: 1.0, rectRadius: 0.06,
-      fill: { color }, line: { color, width: 0 },
-    });
-    s.addText(when, {
-      x: M, y, w: 2.5, h: 1.0, margin: 0,
-      fontFace: HEAD, fontSize: 16, bold: true, color: WHITE, align: 'center', valign: 'middle',
-    });
-    s.addText(what, {
-      x: M + 2.9, y, w: 6.2, h: 1.0, margin: 0,
-      fontFace: BODY, fontSize: 16, color: '3E4C57', valign: 'middle',
-    });
-    s.addText(note, {
-      x: M + 9.3, y, w: CW - 9.3, h: 1.0, margin: 0,
-      fontFace: BODY, fontSize: 13, italic: true, color: MUTED, valign: 'middle', align: 'right',
-    });
-  });
-
-  s.addText('Address-dependent mapping is built deliberately; no netfilter flag produces it.', {
-    x: M, y: 6.42, w: CW, h: 0.32, margin: 0, fontFace: BODY, fontSize: 14, italic: true, color: TEAL_DK,
-  });
-  s.addText('Week one: addresses, firewall rules, SIMs and handsets. They gate week four.', {
-    x: M, y: 6.78, w: CW, h: 0.32, margin: 0, fontFace: BODY, fontSize: 14, italic: true, color: AMBER,
-  });
-
-  s.addNotes('Every phase carries an exit criterion in the written brief. The week-3 checkpoint is code rather than a document: a reflexive address obtained over the transport\u2019s own socket, which forces the demultiplexer change early and tells us whether the socket can be shared at all. Excluded by design and named as such: the autoNAT sidecar, the byzantine analysis, the weighted prevalence estimate and the decision-rule fit.');
-}
-
-// ============================================================ 10 · open decisions (dark)
-{
-  const s = p.addSlide();
-  s.background = { color: INK };
-  title(s, 'Open decisions', 'Before the work begins', true);
-
-  const qs = [
-    ['Primary claim', 'The algorithm or the measurement, not both.'],
-    ['UDX fork', 'The guard cannot see UDX\u2019s own sends. Patch the fork, or report the residual.'],
-    ['Inbound UDP', 'May the host receive unsolicited datagrams on two addresses, two ports?'],
-    ['Testbed budget', 'Each SIM covers one carrier, APN and plan.'],
-  ];
-  qs.forEach(([h, b], i) => {
-    const col = i % 2, row = Math.floor(i / 2);
-    const x = M + col * (CW / 2 + 0.2), y = 2.5 + row * 1.6;
-    const w = CW / 2 - 0.2;
-    s.addText(h, { x, y, w, h: 0.4, margin: 0, fontFace: HEAD, fontSize: 19, bold: true, color: TEAL });
-    s.addText(b, { x, y: y + 0.48, w, h: 0.5, margin: 0, fontFace: BODY, fontSize: 15, color: 'B7C4CC' });
-  });
-
-  s.addText('The written brief carries the detail: measurand, threat model, milestones, exit criteria.', {
-    x: M, y: 6.1, w: CW, h: 0.4, margin: 0, fontFace: BODY, fontSize: 14, italic: true, color: MUTED,
-  });
-
-  s.addNotes('The anchor is IPv6-only in its data plane, which excludes the IPv4-only CGNAT population the study targets; that is a fifth decision and it also affects the product. Three unrelated defects found while surveying the transport are listed in the brief.');
-}
-
-p.writeFile({ fileName: 'grassroots-nat-project.pptx' }).then((f) => console.log('wrote', f));
+// pptxgenjs writes an empty notes page per slide and a notes master. Strip them.
+const fs = require('fs');
+const JSZip = require('jszip');
+p.writeFile({ fileName: 'grassroots-nat-project.pptx' }).then(async (f) => {
+  const zip = await JSZip.loadAsync(fs.readFileSync(f));
+  Object.keys(zip.files).filter((n) => /^ppt\/notes(Slides|Masters)\//.test(n)).forEach((n) => zip.remove(n));
+  const edit = async (n, fn) => zip.file(n, fn(await zip.file(n).async('string')));
+  await edit('[Content_Types].xml', (x) => x.replace(/<Override[^>]*PartName="\/ppt\/notes(Slides|Masters)\/[^>]*\/>/g, ''));
+  await edit('ppt/presentation.xml', (x) => x.replace(/<p:notesMasterIdLst>.*?<\/p:notesMasterIdLst>/s, ''));
+  await edit('ppt/_rels/presentation.xml.rels', (x) => x.replace(/<Relationship [^>]*notesMaster[^>]*\/>/g, ''));
+  for (const n of Object.keys(zip.files).filter((n) => /^ppt\/slides\/_rels\/.*\.rels$/.test(n))) {
+    await edit(n, (x) => x.replace(/<Relationship [^>]*notesSlide[^>]*\/>/g, ''));
+  }
+  fs.writeFileSync(f, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  console.log('wrote', f);
+});

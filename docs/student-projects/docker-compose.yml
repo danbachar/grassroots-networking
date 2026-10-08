@@ -1,0 +1,48 @@
+# Runs mininet-topology.py in a privileged Linux container, so the testbed
+# works from macOS (Docker Desktop) as well as from a Linux host.
+#
+#     docker compose run --rm mininet                 # build, start, drop into mininet>
+#     docker compose run --rm mininet bash            # shell with OVS running, nothing started
+#
+# Use `run`, not `up`: the topology ends in the interactive mininet CLI, which
+# needs a TTY attached. Exiting the CLI tears the network down.
+#
+# privileged is not optional: mininet creates network namespaces and veth pairs,
+# Open vSwitch needs its kernel datapath, and the NAT routers load nftables
+# rules. All of it stays inside the container's own network namespace.
+
+services:
+  mininet:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ubuntu:22.04
+        ENV DEBIAN_FRONTEND=noninteractive
+        # jammy ships mininet 2.3.0 (the script needs >= 2.3).
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+              mininet openvswitch-switch nftables iproute2 iputils-ping \
+              iperf3 tcpdump netcat-openbsd kmod python3 \
+            && rm -rf /var/lib/apt/lists/*
+        RUN printf '%s\n' \
+              '#!/bin/sh' \
+              'set -e' \
+              'modprobe openvswitch 2>/dev/null || true   # no-op where it is built in' \
+              '/usr/share/openvswitch/scripts/ovs-ctl start --no-ovs-vswitchd --system-id=random' \
+              '# Started directly: ovs-ctl aborts when it cannot modprobe, which it' \
+              '# cannot under Docker Desktop, where the datapath is built in (=y).' \
+              'ovs-vswitchd --pidfile --detach --log-file' \
+              'mn -c >/dev/null 2>&1 || true              # clear leftovers from a crashed run' \
+              'exec "$@"' \
+              > /usr/local/bin/entrypoint && chmod +x /usr/local/bin/entrypoint
+        WORKDIR /work
+        ENTRYPOINT ["/usr/local/bin/entrypoint"]
+        CMD ["python3", "mininet-topology.py"]
+    image: grassroots-mininet
+    privileged: true
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./:/work
+      # Lets modprobe find the openvswitch module on a Linux host. Harmless
+      # under Docker Desktop, where the VM kernel provides it.
+      - /lib/modules:/lib/modules:ro

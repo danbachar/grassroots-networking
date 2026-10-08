@@ -33,7 +33,7 @@ nothing under test will fire. See the prerequisites in nat-project.pdf.
 
 from mininet.topo import Topo
 from mininet.net import Mininet
-from mininet.node import Node
+from mininet.node import Node, OVSBridge
 from mininet.link import TCLink
 from mininet.cli import CLI
 from mininet.log import setLogLevel, info
@@ -159,7 +159,9 @@ NAT_CLASSES = {
 
 def main():
     setLogLevel('info')
-    net = Mininet(topo=NatTopo(), link=TCLink, controller=None)
+    # OVSBridge, not the default OVSSwitch: with no controller the default runs
+    # in secure fail mode and drops every packet.
+    net = Mininet(topo=NatTopo(), link=TCLink, switch=OVSBridge, controller=None)
     net.start()
 
     for i, (node, cls) in enumerate(NODES, start=1):
